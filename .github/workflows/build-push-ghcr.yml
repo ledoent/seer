@@ -1,0 +1,115 @@
+name: Build and Push to GHCR (Public)
+
+# Publishes a public ledoent fork image of seer to GitHub Container Registry.
+# Companion to build-push-gcp.yml (which targets kencove-prod GAR). This
+# workflow exists so self-hosted Sentry deployments can pull the seer image
+# without GCP credentials.
+
+on:
+  push:
+    branches:
+      - main
+      - feature/explorer-endpoints
+      - feat/build-push-ghcr
+    tags:
+      - 'v*'
+    paths-ignore:
+      - '**.md'
+      - '.coderabbit.yaml'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag override (defaults to branch + short SHA)'
+        required: false
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ledoent/seer
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate image tags
+        id: tags
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          SHA_SHORT=$(git rev-parse --short HEAD)
+          BRANCH_TAG=$(echo "$REF_NAME" | sed 's|[^a-zA-Z0-9._-]|-|g' | cut -c1-60)
+
+          TAGS="${IMAGE}:lightweight-${SHA_SHORT}"
+          TAGS="${TAGS},${IMAGE}:${BRANCH_TAG}"
+
+          if [ -n "$INPUT_TAG" ]; then
+            TAGS="${TAGS},${IMAGE}:${INPUT_TAG}"
+          fi
+
+          # The `lightweight` mutable tag only moves from the main dev branch
+          # so external pullers get a predictable target.
+          if [ "$REF_NAME" = "feature/explorer-endpoints" ] || [ "$REF_NAME" = "main" ]; then
+            TAGS="${TAGS},${IMAGE}:lightweight"
+          fi
+
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            TAGS="${TAGS},${IMAGE}:${REF_NAME}"
+          fi
+
+          {
+            echo "tags=${TAGS}"
+            echo "sha_short=${SHA_SHORT}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Generated tags: ${TAGS}"
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Lightweight.Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            SEER_VERSION_SHA=${{ steps.tags.outputs.sha_short }}
+            SENTRY_ENVIRONMENT=production
+          labels: |
+            org.opencontainers.image.source=https://github.com/ledoent/seer
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.title=seer (ledoent)
+            org.opencontainers.image.description=Lightweight seer image for self-hosted Sentry + Seer
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Summary
+        run: |
+          {
+            echo "### seer pushed to GHCR :rocket:"
+            echo ""
+            echo "**Tags:**"
+            echo '${{ steps.tags.outputs.tags }}' | tr ',' '\n' | sed 's/^/- `/' | sed 's/$/`/'
+            echo ""
+            echo "**Pull (anonymous, once package is public):**"
+            echo '```'
+            echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:lightweight"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -72,3 +72,11 @@ ENV SENTRY_ENVIRONMENT ${SENTRY_ENVIRONMENT}
 # supervisord with a hardcoded config path; CMD args are not forwarded.
 ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
+
+# TCP-listen probe rather than HTTP /health/ready — readiness tries to load the
+# ML embeddings (issue_severity_v0/...) which the open fork doesn't ship yet
+# (ROADMAP item #1), so the HTTP probe would always return 500 and mark the
+# container unhealthy even when gunicorn is serving fine. start-period gives
+# gunicorn time to bind 9091 (worker boot ~15-25s once dependencies+celery init).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
+  CMD python -c "import socket; s=socket.socket(); s.settimeout(3); s.connect(('localhost', 9091))" || exit 1

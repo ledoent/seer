@@ -10,9 +10,15 @@ if [ "${SKIP_MIGRATIONS}" != "true" ] && [ "${SKIP_MIGRATIONS}" != "1" ]; then
     # Set Flask app for migrations
     export FLASK_APP="src.seer.app:start_app()"
 
-    # Run alembic migrations via flask-migrate
-    # This is idempotent - alembic tracks which migrations have run
-    if flask db upgrade; then
+    # Run alembic migrations via flask-migrate.
+    # `heads` (plural) is required: the kencove fork has a divergent migration
+    # tree (multiple heads, e.g., the `kencove_001` branch from upstream).
+    # `flask db upgrade` without `heads` fails with:
+    #   Multiple head revisions are present for given argument 'head'
+    # which masquerades as "migrations failed" and lets the container start
+    # with an empty DB, producing SEER-5 (`relation "run_state" does not
+    # exist`) when celery-beat fires. Idempotent under all conditions.
+    if flask db upgrade heads; then
         echo "Database migrations completed successfully."
     else
         echo "WARNING: Database migrations failed. Container will continue starting."

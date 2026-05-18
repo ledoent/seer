@@ -82,6 +82,7 @@ Currently seer assumes Anthropic / OpenAI clients are wired. For self-host we wa
 
 ### 6. Build-time gotchas to fix in `Lightweight.Dockerfile`
 
+- ~~Skips `entrypoint.sh`, so fresh deploys land with an empty seer-db and the autofix celery-beat task fires `SEER-5: relation "run_state" does not exist` every minute until `flask db upgrade heads` is run manually. **Fixed: add `entrypoint.sh` to the COPY list + set it as `ENTRYPOINT`.**~~
 - Currently builds `Lightweight.Dockerfile` linux/amd64 only — add `linux/arm64` so M-series Macs can pull and `docker run` locally for development.
 - `torch==2.2.0 --index-url https://download.pytorch.org/whl/cpu` is pinned; should track major torch security releases.
 - The fat default `Dockerfile` (`Compose.Dockerfile`) pulls full ML training deps and produces a ~7 GB image. Document explicitly that the lightweight one is the production target.

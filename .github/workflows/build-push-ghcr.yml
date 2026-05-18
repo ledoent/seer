@@ -28,6 +28,13 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ledoent/seer
 
+# Cancel any in-flight build for the same ref when a new push lands. Saves
+# GHA minutes on rapid pushes and prevents two builds from racing to publish
+# the same mutable :lightweight tag.
+concurrency:
+  group: build-push-ghcr-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest

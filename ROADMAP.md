@@ -42,7 +42,7 @@ There are no `wget`/`gs://`/`curl` references in `Dockerfile`, `Lightweight.Dock
 
 ### 2. Production-mode assertion chain
 
-[`src/seer/configuration.py:165-185`](src/seer/configuration.py) requires, in production:
+`src/seer/configuration.py` lines 165–185 (function `do_validation()`) require, in production:
 - `SENTRY_DSN` ✅ now wired
 - `SENTRY_REGION` ✅ set to `us` in compose
 - `GITHUB_APP_ID` ❌ needs GitHub App for autofix PR creation

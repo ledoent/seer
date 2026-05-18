@@ -13,9 +13,10 @@ on:
       - feat/build-push-ghcr
     tags:
       - 'v*'
-    paths-ignore:
-      - '**.md'
-      - '.coderabbit.yaml'
+  pull_request:
+    branches:
+      - main
+      - feature/explorer-endpoints
   workflow_dispatch:
     inputs:
       tag:

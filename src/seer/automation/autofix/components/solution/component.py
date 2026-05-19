@@ -165,7 +165,7 @@ class SolutionComponent(BaseComponent[SolutionRequest, SolutionOutput]):
                     if config.SENTRY_REGION == "de"
                     else {
                         "models": [
-                            GeminiProvider.model("gemini-2.5-pro-preview-05-06", max_tokens=32000),
+                            GeminiProvider.model("gemini-2.5-pro", max_tokens=32000),
                             GeminiProvider.model("gemini-2.5-pro"),
                         ],
                     }

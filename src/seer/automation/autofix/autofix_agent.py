@@ -389,6 +389,7 @@ class AutofixAgent(LlmAgent):
         state: State[AutofixContinuation],
         generated_at_memory_index: int,
         step_id: str,
+        **_langfuse_kwargs,
     ):
         step = state.get().find_step(id=step_id)
 

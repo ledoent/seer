@@ -109,6 +109,23 @@ class AppConfig(BaseModel):
     AUTOFIXABILITY_SCORING_ENABLED: ParseBool = False
     AUTOFIX_ENABLED: ParseBool = False
     AUTOFIX_BACKFILL_ENABLED: ParseBool = False
+
+    # Autofix orchestrator selection. See src/seer/automation/harness/ +
+    # docs/coding-harnesses.md. "builtin" runs the existing hand-rolled
+    # AutofixAgent loop; alternate values (e.g. "aider") delegate to an
+    # external coding harness wrapped in src/seer/automation/harness/.
+    AUTOFIX_HARNESS: str = "builtin"
+    # Model the harness uses when AUTOFIX_HARNESS != "builtin". Format is
+    # provider-specific (e.g. "gemini-2.5-flash", "gemini-2.5-pro"). The
+    # builtin path ignores this and uses its existing per-component model
+    # config.
+    AUTOFIX_HARNESS_MODEL: str = "gemini-2.5-flash"
+    # When True, an unknown / unavailable harness raises HarnessNotAvailableError
+    # instead of falling back to "builtin" with a warning. False is the
+    # operationally safer default — bad-harness config still produces
+    # autofixes via the legacy path.
+    AUTOFIX_HARNESS_STRICT: ParseBool = False
+
     GRPC_SERVER_ENABLE: ParseBool = False
     HOSTNAME: str = Field(default_factory=gethostname)
 

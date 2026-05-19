@@ -4,7 +4,7 @@ import sentry_sdk
 from langfuse import observe
 
 from seer.automation.agent.agent import AgentConfig, RunConfig
-from seer.automation.agent.client import AnthropicProvider, GeminiProvider, LlmClient
+from seer.automation.agent.client import GeminiProvider, LlmClient
 from seer.automation.autofix.autofix_agent import AutofixAgent
 from seer.automation.autofix.autofix_context import AutofixContext
 from seer.automation.autofix.components.root_cause.models import (
@@ -56,16 +56,16 @@ class RootCauseAnalysisComponent(BaseComponent[RootCauseAnalysisRequest, RootCau
 
             try:
                 de_discovery_config = {
-                    "model": AnthropicProvider.model("claude-sonnet-4@20250514"),
+                    "model": GeminiProvider.model("gemini-2.5-pro"),
                     "max_tokens": 8192,
                 }
                 us_discovery_config = {
                     "models": [
                         GeminiProvider.model(
-                            "gemini-2.5-flash-preview-04-17",
+                            "gemini-2.5-flash",
                             region="us-central1",  # Only try in this region for this model.
                         ),
-                        GeminiProvider.model("gemini-2.5-flash-preview-05-20"),
+                        GeminiProvider.model("gemini-2.5-flash"),
                     ],
                     "max_tokens": 32000,
                 }
@@ -112,7 +112,7 @@ class RootCauseAnalysisComponent(BaseComponent[RootCauseAnalysisRequest, RootCau
                 agent.tools = []
                 response = agent.run(
                     run_config=RunConfig(
-                        model=AnthropicProvider.model("claude-sonnet-4@20250514"),
+                        model=GeminiProvider.model("gemini-2.5-pro"),
                         prompt=RootCauseAnalysisPrompts.root_cause_proposal_msg(),
                         system_prompt=RootCauseAnalysisPrompts.format_system_msg(
                             repos_str=repos_str, mode="reasoning"
@@ -143,17 +143,17 @@ class RootCauseAnalysisComponent(BaseComponent[RootCauseAnalysisRequest, RootCau
                 )
 
                 de_formatter_config: dict[str, object] = {
-                    "model": GeminiProvider.model("gemini-2.0-flash-001"),
+                    "model": GeminiProvider.model("gemini-2.5-flash"),
                     "max_tokens": 8192,
                 }
 
                 us_formatter_config: dict[str, object] = {
                     "models": [
                         GeminiProvider.model(
-                            "gemini-2.5-flash-preview-04-17",
+                            "gemini-2.5-flash",
                             region="us-central1",  # Only try in this region for this model.
                         ),
-                        GeminiProvider.model("gemini-2.5-flash-preview-05-20"),
+                        GeminiProvider.model("gemini-2.5-flash"),
                     ],
                     "max_tokens": 32000,
                 }

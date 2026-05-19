@@ -61,7 +61,7 @@ def semantic_search(query: str, context: AutofixContext | CodegenContext) -> str
     run_config = RunConfig(
         system_prompt=system_prompt,
         prompt=query,
-        model=GeminiProvider(model_name="gemini-2.0-flash-001"),
+        model=GeminiProvider(model_name="gemini-2.5-flash"),
         temperature=0.0,
         max_iterations=32,
     )

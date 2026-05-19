@@ -61,7 +61,7 @@ class PrReviewCodingComponent(BaseComponent[CodePrReviewRequest, CodePrReviewOut
                 prompt=CodingCodeReviewPrompts.format_pr_description_step(
                     diff_str=request.diff,
                 ),
-                model=GeminiProvider(model_name="gemini-2.0-flash-001"),
+                model=GeminiProvider(model_name="gemini-2.5-flash"),
                 response_format=CodePrReviewOutput.PrDescription,
                 run_name="Generate PR description",
                 max_tokens=4096,
@@ -70,7 +70,7 @@ class PrReviewCodingComponent(BaseComponent[CodePrReviewRequest, CodePrReviewOut
             formatted_response = llm_client.generate_structured(
                 messages=agent.memory,
                 prompt=CodingCodeReviewPrompts.pr_review_formatter_msg(),
-                model=GeminiProvider(model_name="gemini-2.0-flash-001"),
+                model=GeminiProvider(model_name="gemini-2.5-flash"),
                 response_format=list[CodePrReviewOutput.Comment],
                 run_name="Generate PR review structured",
                 max_tokens=8192,

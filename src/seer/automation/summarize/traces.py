@@ -46,7 +46,7 @@ def summarize_trace(
     try:
         completion = llm_client.generate_structured(
             model=GeminiProvider.model(
-                "gemini-2.5-flash-preview-04-17",
+                "gemini-2.5-flash",
             ),
             prompt=prompt,
             response_format=TraceSummaryForLlmToGenerate,
@@ -79,8 +79,7 @@ def _get_prompt(trace_str: str, only_transactions: bool) -> str:
 
     prompt = ""
     if only_transactions:
-        prompt = textwrap.dedent(
-            f"""
+        prompt = textwrap.dedent(f"""
             You are a principal performance engineer who is excellent at explaining concepts simply to engineers of all levels. Our traces have a lot of dense information that is hard to understand quickly. Please provide key insights about the trace below so our engineers can immediately understand what's going on.
             Please note that the engineers have access to the same information as you do, so please do not state any obvious high level information about the trace and its spans.
 
@@ -136,11 +135,9 @@ def _get_prompt(trace_str: str, only_transactions: bool) -> str:
             <trace>
             {trace_str}
             </trace>
-            """
-        )
+            """)
     else:
-        prompt = textwrap.dedent(
-            f"""
+        prompt = textwrap.dedent(f"""
             You are a principal performance engineer who is excellent at explaining concepts simply to engineers of all levels. Our traces have a lot of dense information that is hard to understand quickly. Please provide key insights about the trace below so our engineers can immediately understand what's going on.
             Please note that the engineers have access to the same information as you do, so please do not state any obvious high level information about the trace and its spans.
 
@@ -194,7 +191,6 @@ def _get_prompt(trace_str: str, only_transactions: bool) -> str:
             <trace>
             {trace_str}
             </trace>
-            """
-        )
+            """)
 
     return prompt

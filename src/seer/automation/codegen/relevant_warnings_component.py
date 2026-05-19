@@ -243,13 +243,11 @@ class AssociateWarningsWithIssuesComponent(
     @staticmethod
     def _format_issue_with_related_filename(issue: IssueDetails, related_filename: str) -> str:
         event_details = EventDetails.from_event(issue.events[0])
-        return textwrap.dedent(
-            f"""\
+        return textwrap.dedent(f"""\
             {event_details.format_event_without_breadcrumbs(include_context=False, include_var_values=False)}
             ----------
             This file, in particular, contained function(s) that overlapped with the exceptions: {related_filename}
-            """
-        )
+            """)
 
     @staticmethod
     def _top_k_indices(distances: np.ndarray, k: int) -> list[tuple[int, ...]]:
@@ -317,7 +315,7 @@ def _is_issue_fixable(issue: IssueDetails, llm_client: LlmClient = injected) -> 
     # LRU-cached by the issue id. The same issue could be analyzed many times if, e.g.,
     # a repo has a set of files which are frequently used to handle and raise exceptions.
     completion = llm_client.generate_structured(
-        model=GeminiProvider.model("gemini-2.0-flash-lite-001"),
+        model=GeminiProvider.model("gemini-2.5-flash-lite"),
         system_prompt=IsFixableIssuePrompts.format_system_msg(),
         prompt=IsFixableIssuePrompts.format_prompt(
             formatted_error=EventDetails.from_event(
@@ -499,7 +497,7 @@ class PredictRelevantWarningsComponent(
                 f"Predicting relevance of warning {warning_and_pr_file.warning.id} and issue {issue.id}"
             )
             completion = llm_client.generate_structured(
-                model=GeminiProvider.model("gemini-2.0-flash-001"),
+                model=GeminiProvider.model("gemini-2.5-flash"),
                 system_prompt=ReleventWarningsPrompts.format_system_msg(),
                 prompt=ReleventWarningsPrompts.format_prompt(
                     formatted_warning=warning_and_pr_file.warning.format_warning(),
@@ -583,7 +581,7 @@ class StaticAnalysisSuggestionsComponent(
             + "</sentry_issues>"
         )
         completion = llm_client.generate_structured(
-            model=GeminiProvider.model("gemini-2.0-flash-001"),
+            model=GeminiProvider.model("gemini-2.5-flash"),
             system_prompt=StaticAnalysisSuggestionsPrompts.format_system_msg(),
             prompt=StaticAnalysisSuggestionsPrompts.format_prompt(
                 diff_with_warnings=diff_with_warnings,

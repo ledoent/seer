@@ -107,7 +107,7 @@ def run_relevant_warnings_evaluation_on_item(
     )
 
     scoring_n_panel = 1
-    scoring_model = "gemini-2.5-pro-preview-03-25"
+    scoring_model = "gemini-2.5-pro"
 
     dataset_item_trace_id = None
     # In langfuse 3.x, observe() is replaced by run() which yields a span
@@ -155,7 +155,7 @@ def run_relevant_warnings_evaluation_on_item(
     scores_content = [score.match_score for score in valid_scores]
     location_match = [score.location_match for score in valid_scores]
     langfuse.create_score(
-        comment=f"Expected number of bugs: {len(list_of_issues)}; Actual bugs found: {[ (suggestion_idx, bug_idx) for suggestion_idx, bug_idx in zip(bug_predictions_matched, bugs_matched)]}",
+        comment=f"Expected number of bugs: {len(list_of_issues)}; Actual bugs found: {[(suggestion_idx, bug_idx) for suggestion_idx, bug_idx in zip(bug_predictions_matched, bugs_matched)]}",
         trace_id=dataset_item_trace_id,
         name=make_score_name(model=scoring_model, n_panel=scoring_n_panel, name="bugs_found_count"),
         value=len(bugs_matched),

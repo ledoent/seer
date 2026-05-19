@@ -4,7 +4,7 @@ import sentry_sdk
 from langfuse import observe
 from pydantic import BaseModel
 
-from seer.automation.agent.client import LlmClient, OpenAiProvider
+from seer.automation.agent.client import GeminiProvider, LlmClient
 from seer.automation.autofixability import AutofixabilityModel
 from seer.automation.models import EventDetails
 from seer.automation.summarize.models import (
@@ -153,9 +153,8 @@ def summarize_issue(
         )
 
         try:
-            # Use OpenAI for self-hosted (Gemini requires GCP Workload Identity)
             completion = llm_client.generate_structured(
-                model=OpenAiProvider.model("gpt-4o-mini"),
+                model=GeminiProvider.model("gemini-2.5-flash"),
                 prompt=prompt,
                 response_format=IssueSummaryForLlmToGenerate,
                 temperature=0.0,

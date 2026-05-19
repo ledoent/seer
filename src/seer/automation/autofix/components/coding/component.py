@@ -5,7 +5,7 @@ import sentry_sdk
 from langfuse import observe
 
 from seer.automation.agent.agent import AgentConfig, RunConfig
-from seer.automation.agent.client import AnthropicProvider, LlmClient
+from seer.automation.agent.client import GeminiProvider, LlmClient
 from seer.automation.agent.models import Message, ToolCall
 from seer.automation.autofix.autofix_agent import AutofixAgent
 from seer.automation.autofix.autofix_context import AutofixContext
@@ -174,9 +174,9 @@ class CodingComponent(BaseComponent[CodingRequest, CodingOutput]):
                     run_name="Code",
                     max_iterations=64,
                     models=[
-                        AnthropicProvider.model("claude-sonnet-4@20250514"),
-                        AnthropicProvider.model("claude-3-7-sonnet@20250219"),
-                        AnthropicProvider.model("claude-sonnet-4@20250514"),
+                        GeminiProvider.model("gemini-2.5-pro"),
+                        GeminiProvider.model("gemini-2.5-pro"),
+                        GeminiProvider.model("gemini-2.5-pro"),
                     ],
                 ),
             )

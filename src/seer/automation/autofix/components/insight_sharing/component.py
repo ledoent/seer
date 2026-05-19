@@ -223,7 +223,7 @@ def create_insight_output(
     )
 
     completion = llm_client.generate_text(
-        model=GeminiProvider.model("gemini-2.0-flash-001"),
+        model=GeminiProvider.model("gemini-2.5-flash"),
         prompt=prompt_one,
         temperature=0.0,
     )
@@ -248,7 +248,7 @@ def create_insight_output(
     structured_completion = llm_client.generate_structured(
         messages=memory,
         prompt=prompt_two,
-        model=GeminiProvider.model("gemini-2.0-flash-001"),
+        model=GeminiProvider.model("gemini-2.5-flash"),
         temperature=0.0,
         max_tokens=4096,
         response_format=JustificationOutput,

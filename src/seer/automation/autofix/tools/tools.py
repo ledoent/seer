@@ -417,7 +417,7 @@ class BaseTools:
         """
         self.context.event_manager.add_log(f'Googling "{question}"...')
         return llm_client.generate_text_from_web_search(
-            prompt=question, model=GeminiProvider(model_name="gemini-2.0-flash-001")
+            prompt=question, model=GeminiProvider(model_name="gemini-2.5-flash")
         )
 
     @observe(name="Get Profile")

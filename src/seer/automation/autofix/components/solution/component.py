@@ -5,7 +5,7 @@ import sentry_sdk
 from langfuse import observe
 
 from seer.automation.agent.agent import AgentConfig, RunConfig
-from seer.automation.agent.client import AnthropicProvider, GeminiProvider, LlmClient
+from seer.automation.agent.client import GeminiProvider, LlmClient
 from seer.automation.agent.models import Message, ToolCall
 from seer.automation.autofix.autofix_agent import AutofixAgent
 from seer.automation.autofix.autofix_context import AutofixContext
@@ -157,8 +157,8 @@ class SolutionComponent(BaseComponent[SolutionRequest, SolutionOutput]):
                 discovery_config = (
                     {
                         "models": [
-                            AnthropicProvider.model("claude-sonnet-4@20250514"),
-                            AnthropicProvider.model("claude-3-7-sonnet@20250219"),
+                            GeminiProvider.model("gemini-2.5-pro"),
+                            GeminiProvider.model("gemini-2.5-pro"),
                         ],
                         "max_tokens": 8192,
                     }
@@ -166,7 +166,7 @@ class SolutionComponent(BaseComponent[SolutionRequest, SolutionOutput]):
                     else {
                         "models": [
                             GeminiProvider.model("gemini-2.5-pro-preview-05-06", max_tokens=32000),
-                            AnthropicProvider.model("claude-sonnet-4@20250514", max_tokens=8192),
+                            GeminiProvider.model("gemini-2.5-pro"),
                         ],
                     }
                 )
@@ -191,17 +191,17 @@ class SolutionComponent(BaseComponent[SolutionRequest, SolutionOutput]):
                 self.context.event_manager.add_log("Formatting for human consumption...")
 
                 de_config: dict[str, object] = {
-                    "model": GeminiProvider.model("gemini-2.0-flash-001"),
+                    "model": GeminiProvider.model("gemini-2.5-flash"),
                 }
 
                 us_config: dict[str, object] = {
                     "models": [
                         GeminiProvider.model(
-                            "gemini-2.5-flash-preview-04-17",
+                            "gemini-2.5-flash",
                             region="us-central1",
                         ),
-                        GeminiProvider.model("gemini-2.5-flash-preview-05-20"),
-                        GeminiProvider.model("gemini-2.0-flash-001"),
+                        GeminiProvider.model("gemini-2.5-flash"),
+                        GeminiProvider.model("gemini-2.5-flash"),
                     ],
                 }
 

@@ -1093,20 +1093,20 @@ def set_project_preference_bulk_endpoint(
 def llm_generate_endpoint(data: LlmGenerateRequest) -> LlmGenerateResponse:
     """LLM text generation for issue view titles and similar features.
 
-    Uses OpenAI via the existing LlmClient infrastructure. Sentry sends
-    provider="gemini" but we route to OpenAI for self-hosted.
+    Uses Gemini via Vertex AI (Application Default Credentials). Self-host
+    sets GOOGLE_APPLICATION_CREDENTIALS + GOOGLE_CLOUD_PROJECT in the seer
+    container env.
     """
-    from seer.automation.agent.client import LlmClient, OpenAiProvider
+    from seer.automation.agent.client import GeminiProvider, LlmClient
 
     try:
-        # Map Sentry's model names to OpenAI models
-        # Sentry sends "flash" (Gemini Flash) — we use gpt-4o-mini as equivalent
+        # Map Sentry's provider hints to Gemini GA models.
         model_mapping = {
-            "flash": "gpt-4o-mini",
-            "pro": "gpt-4o",
+            "flash": "gemini-2.5-flash",
+            "pro": "gemini-2.5-pro",
         }
-        model_name = model_mapping.get(data.model, "gpt-4o-mini")
-        model = OpenAiProvider.model(model_name)
+        model_name = model_mapping.get(data.model, "gemini-2.5-flash")
+        model = GeminiProvider.model(model_name)
 
         llm_client = LlmClient()
         response = llm_client.generate_text(

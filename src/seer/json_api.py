@@ -116,7 +116,11 @@ def json_api(blueprint: Blueprint, url_rule: str) -> Callable[[_F], _F]:
                     sentry_sdk.capture_exception(e)
                     raise InternalServerError("Something went wrong with the Bearer token auth")
             else:
-                sentry_sdk.capture_message(f"No auth header found for request to {request.url}")
+                # Demoted from sentry_sdk.capture_message to logger.warning to
+                # silence the self-host noise (Sentry's caller doesn't set an
+                # Authorization header on these legacy v1 routes; without
+                # demotion the gauge fires ~700×/day per Sentry issue #21).
+                logger.warning(f"No auth header found for request to {request.url}")
                 # TODO: Actually raise unauthorized when we are sure we can enforce auth.
                 # raise Unauthorized("No auth header found")
 

@@ -41,8 +41,8 @@ RUN uv pip install --system -r requirements.txt
 # Copy model files (assuming they are in the 'models' directory)
 COPY models/ models/
 # Copy scripts
-COPY celeryworker.sh celerybeat.sh gunicorn.sh grpcserver.sh flower.sh ./
-RUN chmod +x ./celeryworker.sh ./celerybeat.sh ./gunicorn.sh ./grpcserver.sh ./flower.sh
+COPY celeryworker.sh celerybeat.sh gunicorn.sh grpcserver.sh flower.sh entrypoint.sh ./
+RUN chmod +x ./celeryworker.sh ./celerybeat.sh ./gunicorn.sh ./grpcserver.sh ./flower.sh ./entrypoint.sh
 
 # Copy source code
 COPY src/ src/
@@ -64,4 +64,19 @@ ENV SEER_VERSION_SHA ${SEER_VERSION_SHA}
 ARG SENTRY_ENVIRONMENT=production
 ENV SENTRY_ENVIRONMENT ${SENTRY_ENVIRONMENT}
 
+# entrypoint.sh runs `flask db upgrade heads` then execs supervisord. Without
+# this wrapper, fresh deploys land with an empty seer-db and the autofix
+# celery-beat task SEER-5 fires "relation \"run_state\" does not exist". Set
+# SKIP_MIGRATIONS=1 to bypass (e.g., for compose dev with an externally-managed
+# database). The CMD below is purely informational — entrypoint.sh execs
+# supervisord with a hardcoded config path; CMD args are not forwarded.
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
+
+# TCP-listen probe rather than HTTP /health/ready — readiness tries to load the
+# ML embeddings (issue_severity_v0/...) which the open fork doesn't ship yet
+# (ROADMAP item #1), so the HTTP probe would always return 500 and mark the
+# container unhealthy even when gunicorn is serving fine. start-period gives
+# gunicorn time to bind 9091 (worker boot ~15-25s once dependencies+celery init).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
+  CMD python -c "import socket; s=socket.socket(); s.settimeout(3); s.connect(('localhost', 9091))" || exit 1

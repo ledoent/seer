@@ -154,4 +154,3 @@ tests/**/cassettes/
 
 # Local config files
 CLAUDE.md
-entrypoint.sh

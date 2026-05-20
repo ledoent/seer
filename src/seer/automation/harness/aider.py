@@ -51,7 +51,7 @@ _AIDER_TIMEOUT_SECONDS = 600  # 10 min hard cap per invocation
 _GIT_CLONE_TIMEOUT_SECONDS = 120
 
 # Step-name -> aider mode mapping. The diagnostic steps (root_cause,
-# solution) use `--ask` so aider doesn't try to commit anything;
+# solution) use `--chat-mode ask` so aider doesn't try to commit anything;
 # only the coding step gets the full auto-commit flow.
 _ASK_MODE_STEPS = {"root_cause_analysis", "solution"}
 
@@ -182,6 +182,8 @@ class AiderHarness:
             "--no-stream",
             "--yes",
             "--no-attribute-author",
+            "--no-check-update",
+            "--no-show-release-notes",
             "--model",
             f"vertex_ai/{model_name}",
             "--map-tokens",
@@ -190,7 +192,8 @@ class AiderHarness:
             prompt,
         ]
         if ask_mode:
-            argv.insert(-2, "--ask")
+            argv.insert(-2, "--chat-mode")
+            argv.insert(-2, "ask")
         else:
             argv.insert(-2, "--auto-commits")
 

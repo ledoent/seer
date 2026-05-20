@@ -45,7 +45,10 @@ RUN uv pip install --system -r requirements.txt
 # Just Works. Only loaded when AUTOFIX_HARNESS=aider; the default
 # AUTOFIX_HARNESS=builtin path never touches this venv.
 RUN python -m venv /opt/aider-venv \
- && /opt/aider-venv/bin/pip install --no-cache-dir aider-chat==0.65.0 \
+ && /opt/aider-venv/bin/pip install --no-cache-dir \
+      aider-chat==0.65.0 \
+      "google-auth>=2.29" \
+      "google-cloud-aiplatform>=1.60" \
  && ln -s /opt/aider-venv/bin/aider /usr/local/bin/aider \
  && aider --version
 

@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from seer.automation.agent.models import Message, Usage
 from seer.automation.harness.aider import (
     _AIDER_TIMEOUT_SECONDS,
     _GIT_CLONE_TIMEOUT_SECONDS,
@@ -208,3 +209,140 @@ def test_registry_lookup_finds_aider():
     from seer.automation.harness import select_orchestrator
 
     assert select_orchestrator("aider") is AiderHarness
+
+
+# ─── AutofixAgent contract surface ───────────────────────────────────────
+#
+# The autofix components in root_cause/, solution/, and coding/ call into
+# the agent in five ways: constructor kwargs, agent.add_user_message(...),
+# agent.tools = [], agent.memory (passed to formatter LLM), and agent.usage
+# (summed into step totals). These tests verify AiderHarness matches that
+# surface without a runtime AttributeError.
+
+
+def test_usage_attribute_default_initialized():
+    """coding/solution/root_cause all run `cur.usage += agent.usage` after
+    agent.run — the harness must default-init Usage() so the += works.
+    """
+    harness = AiderHarness()
+    assert isinstance(harness.usage, Usage)
+    # `+= Usage()` must succeed against a fresh Usage() with no AttributeError.
+    accumulator = Usage()
+    accumulator += harness.usage
+    assert accumulator.total_tokens == 0
+
+
+def test_tools_attribute_is_settable():
+    """root_cause/component.py sets `agent.tools = []` mid-flow to disable
+    tools before the reasoning pass.
+    """
+    harness = AiderHarness(tools=["initial-tool-list"])
+    assert harness.tools == ["initial-tool-list"]
+    harness.tools = []
+    assert harness.tools == []
+
+
+def test_add_user_message_appends_to_memory():
+    """Coding + solution components push their prompts via add_user_message
+    before calling run() — that message has to land in memory.
+    """
+    harness = AiderHarness()
+    harness.add_user_message("here is the bug")
+    assert len(harness.memory) == 1
+    assert harness.memory[0].role == "user"
+    assert harness.memory[0].content == "here is the bug"
+
+
+def test_memory_seeded_from_constructor():
+    """If the caller passes prior memory (e.g. CodingComponent's prefill),
+    the harness uses it instead of starting empty.
+    """
+    seed = [Message(role="user", content="prior context")]
+    harness = AiderHarness(memory=seed)
+    assert len(harness.memory) == 1
+    # Defensive copy: mutating the constructor list shouldn't affect us.
+    seed.append(Message(role="user", content="leak"))
+    assert len(harness.memory) == 1
+
+
+@patch("seer.automation.harness.aider.shutil.rmtree")
+@patch("seer.automation.harness.aider.tempfile.mkdtemp")
+@patch("seer.automation.harness.aider.subprocess.run")
+def test_run_falls_back_to_last_user_message_for_prompt(mock_run, mock_mkdtemp, mock_rmtree):
+    """When run_config.prompt is empty (the coding/solution flow), the
+    harness reaches into memory for the last user message.
+    """
+    mock_mkdtemp.return_value = "/tmp/aider-test-xyz"
+    mock_run.return_value = MagicMock(returncode=0, stdout="reasoning", stderr="")
+
+    harness = AiderHarness()
+    harness.add_user_message("the actual prompt from add_user_message")
+    result = harness.run(_mock_run_config(prompt="", memory_storage_key="root_cause_analysis"))
+
+    assert result == "reasoning"
+    aider_argv = next(
+        call.args[0] for call in mock_run.call_args_list if call.args[0][0] == "aider"
+    )
+    # --message immediately follows in argv
+    msg_idx = aider_argv.index("--message")
+    assert aider_argv[msg_idx + 1] == "the actual prompt from add_user_message"
+
+
+@patch("seer.automation.harness.aider.shutil.rmtree")
+@patch("seer.automation.harness.aider.tempfile.mkdtemp")
+@patch("seer.automation.harness.aider.subprocess.run")
+def test_run_appends_assistant_message_for_formatter(mock_run, mock_mkdtemp, mock_rmtree):
+    """The root_cause + solution formatter LLMs read agent.memory after run.
+    The harness must inject aider's stdout as an assistant Message so the
+    formatter has something to extract.
+    """
+    mock_mkdtemp.return_value = "/tmp/aider-test-xyz"
+    mock_run.return_value = MagicMock(returncode=0, stdout="The root cause is X.", stderr="")
+
+    harness = AiderHarness()
+    harness.run(_mock_run_config(memory_storage_key="root_cause_analysis"))
+
+    assistant_msgs = [m for m in harness.memory if m.role == "assistant"]
+    assert len(assistant_msgs) == 1
+    assert "root cause is X" in assistant_msgs[0].content
+
+
+@patch("seer.automation.harness.aider.shutil.rmtree")
+@patch("seer.automation.harness.aider.tempfile.mkdtemp")
+@patch("seer.automation.harness.aider.subprocess.run")
+def test_run_passes_chat_mode_ask_flag(mock_run, mock_mkdtemp, mock_rmtree):
+    """Aider 0.65.0 takes `--chat-mode ask` (two argv tokens), not `--ask`."""
+    mock_mkdtemp.return_value = "/tmp/aider-test-xyz"
+    mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
+
+    harness = AiderHarness()
+    harness.run(_mock_run_config(memory_storage_key="root_cause_analysis"))
+
+    aider_argv = next(
+        call.args[0] for call in mock_run.call_args_list if call.args[0][0] == "aider"
+    )
+    # The two tokens must appear adjacent in that order.
+    chat_idx = aider_argv.index("--chat-mode")
+    assert aider_argv[chat_idx + 1] == "ask"
+    # And --ask must NOT be present (regression guard for the 5a36248 fix).
+    assert "--ask" not in aider_argv
+
+
+@patch("seer.automation.harness.aider.shutil.rmtree")
+@patch("seer.automation.harness.aider.tempfile.mkdtemp")
+@patch("seer.automation.harness.aider.subprocess.run")
+def test_run_passes_update_suppression_flags(mock_run, mock_mkdtemp, mock_rmtree):
+    """`--no-check-update` prevents aider from `pip install --upgrade`-ing
+    itself mid-session, which broke seer's pinned tokenizers on the VM.
+    """
+    mock_mkdtemp.return_value = "/tmp/aider-test-xyz"
+    mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
+
+    harness = AiderHarness()
+    harness.run(_mock_run_config(memory_storage_key="root_cause_analysis"))
+
+    aider_argv = next(
+        call.args[0] for call in mock_run.call_args_list if call.args[0][0] == "aider"
+    )
+    assert "--no-check-update" in aider_argv
+    assert "--no-show-release-notes" in aider_argv

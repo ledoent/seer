@@ -1,21 +1,22 @@
 """External coding-harness orchestrator backed by the ``aider`` CLI.
 
-Drop-in replacement for ``AutofixAgent``: matches the constructor signature
-and the ``.run(run_config)`` -> ``str | None`` return contract, so the
-existing autofix components can swap orchestrators behind a feature flag
-without further code changes. Tools / memory / agent-config kwargs are
-accepted for compatibility but ignored — aider has its own internal tool
-loop and runs fresh per invocation.
+Drop-in replacement for ``AutofixAgent``: matches the constructor signature,
+the ``.run(run_config)`` -> ``str | None`` return contract, and the
+attribute surface the autofix components touch (``memory``, ``usage``,
+``tools``, ``add_user_message``). Tools are accepted but not forwarded to
+aider — aider runs its own tool loop, fresh per invocation.
 
 Phase 2a behaviour (see ``docs/coding-harnesses.md``):
   * Hardcoded ``ledoent/seer`` repo URL on the ``feature/explorer-endpoints``
     branch since the benchmark issues are all seer-side bugs. Dynamic
     repo resolution from Sentry code-mappings is Phase 2b.
-  * ``--ask`` mode for diagnostic steps (root cause, solution); full
-    auto-commit mode for the coding step. Step is inferred from
+  * ``--chat-mode ask`` for diagnostic steps (root cause, solution); full
+    ``--auto-commits`` mode for the coding step. Step is inferred from
     ``run_config.memory_storage_key``.
-  * Captured ``git diff`` lands in ``diff_str`` on the autofix-state step
-    when running coding mode; ``list[FilePatch]`` parsing is deferred.
+  * Captured ``git diff`` is logged at INFO level; persisting it into the
+    autofix-state step (``ChangesStep.changes`` as ``list[FilePatch]``) is
+    deferred to Phase 2b because ``BaseStep`` is a Pydantic model without
+    ``extra="allow"``.
 
 Sandboxing:
   * Each invocation runs in a fresh ``/tmp/aider-<run_id>/`` workdir that
@@ -36,6 +37,7 @@ from typing import Any, Optional
 import sentry_sdk
 
 from seer.automation.agent.agent import RunConfig
+from seer.automation.agent.models import Message, Usage
 from seer.automation.harness import register_harness
 
 logger = logging.getLogger(__name__)
@@ -74,16 +76,21 @@ class AiderHarness:
         memory: Any = None,
         name: str = "AiderHarness",
     ):
-        # Stored for compatibility with the AutofixAgent contract; only
-        # ``context`` and ``name`` are actually used. Tools/memory are
-        # accepted so component code can keep its existing kwargs without
-        # an extra branch.
+        # AutofixAgent contract surface that the components in
+        # autofix/components/{root_cause,solution,coding}/component.py
+        # touch after construction:
+        #   * agent.add_user_message(str)       — append to memory
+        #   * agent.tools = []                  — disable tools mid-flow
+        #   * agent.memory                      — fed to the formatter LLM
+        #   * agent.usage                       — added to step usage totals
+        # We accept the same kwargs, keep a real memory list (seeded from
+        # the caller), and zero-init Usage so post-run aggregation works.
         self.config = config
         self.context = context
         self.name = name
-        self._unused_tools = tools
-        self._unused_memory = memory
-        self.memory: list = []  # required by some downstream code paths
+        self.tools = tools
+        self.memory: list[Message] = list(memory) if memory else []
+        self.usage: Usage = Usage()
 
     def should_continue(self, run_config: RunConfig) -> bool:
         """Compatibility no-op. AiderHarness runs in a single subprocess
@@ -91,15 +98,26 @@ class AiderHarness:
         """
         return False
 
+    def add_user_message(self, content: str) -> None:
+        """Mirror of ``AutofixAgent.add_user_message``. Coding + solution
+        components push their formatted prompt this way before calling
+        ``run()``; we pick it up from memory in ``_resolve_prompt``.
+        """
+        self.memory.append(Message(role="user", content=content))
+
     def run(self, run_config: RunConfig) -> Optional[str]:
-        """Invoke aider with the prompt from ``run_config`` and return
-        its stdout (which contains the model's response text).
+        """Invoke aider with the prompt resolved from ``run_config.prompt``
+        or the last user message added via ``add_user_message``, and
+        return aider's stdout (which contains the model's response).
 
         Raises ``HarnessRunError`` on any subprocess / clone failure.
         """
-        prompt = (run_config.prompt or "").strip()
+        prompt = self._resolve_prompt(run_config)
         if not prompt:
-            raise HarnessRunError("AiderHarness.run requires run_config.prompt to be non-empty")
+            raise HarnessRunError(
+                "AiderHarness.run requires either run_config.prompt or a "
+                "prior add_user_message() call to be non-empty"
+            )
 
         ask_mode = self._is_ask_step(run_config)
         run_id = getattr(run_config, "run_name", None) or "anon"
@@ -114,8 +132,13 @@ class AiderHarness:
             self._clone_repo(workdir)
             stdout = self._invoke_aider(workdir, prompt, ask_mode=ask_mode)
 
+            # Synthesize an assistant Message so downstream formatter LLMs
+            # (root_cause/solution components feed agent.memory into
+            # generate_structured) have aider's output to extract from.
+            if stdout:
+                self.memory.append(Message(role="assistant", content=stdout))
+
             if not ask_mode:
-                # Stash the diff for the coding step to surface in the UI.
                 diff_str = self._capture_diff(workdir)
                 if diff_str:
                     self._record_diff(diff_str)
@@ -125,6 +148,19 @@ class AiderHarness:
             self._cleanup(workdir)
 
     # ─── internal helpers ───────────────────────────────────────────────
+
+    def _resolve_prompt(self, run_config: RunConfig) -> str:
+        """Prefer ``run_config.prompt`` (root_cause path) and fall back to
+        the last user message in memory (coding/solution path, which
+        push the prompt via ``add_user_message`` before ``run()``).
+        """
+        explicit = (getattr(run_config, "prompt", None) or "").strip()
+        if explicit:
+            return explicit
+        for msg in reversed(self.memory):
+            if msg.role == "user" and msg.content:
+                return msg.content.strip()
+        return ""
 
     def _is_ask_step(self, run_config: RunConfig) -> bool:
         key = getattr(run_config, "memory_storage_key", "") or ""
@@ -174,7 +210,6 @@ class AiderHarness:
             # litellm picks these up for vertex_ai/... model routing.
             "VERTEXAI_PROJECT": os.environ.get("GOOGLE_CLOUD_PROJECT", ""),
             "VERTEXAI_LOCATION": "us-central1",
-            "AIDER_NO_PRETTY": "1",
         }
         argv = [
             _AIDER_BIN,
@@ -239,21 +274,21 @@ class AiderHarness:
             return ""
 
     def _record_diff(self, diff_str: str) -> None:
-        """Stash the captured diff onto the current autofix step so the
-        Sentry UI can render it. Best-effort — the context may be None
-        in unit tests or when invoked outside an autofix run.
+        """Phase 2a: log the captured diff only.
+
+        BaseStep is a Pydantic v2 model without ``extra="allow"``, so we
+        cannot tack on a raw ``aider_diff_str`` attribute without a schema
+        change that ripples through the autofix UI contract. Phase 2b
+        will parse the diff into ``list[FilePatch]`` and write it to the
+        existing ``ChangesStep.changes`` field; until then keeping the
+        diff in the celery worker log is the lowest-risk option.
         """
-        if self.context is None:
-            logger.debug("No context — skipping diff record (test/standalone mode)")
-            return
-        try:
-            with self.context.state.update() as state:
-                if state.steps:
-                    # diff_str is the simplest payload that doesn't require
-                    # parsing into FilePatch + Hunks; Phase 2b can upgrade.
-                    state.steps[-1].aider_diff_str = diff_str
-        except Exception as exc:
-            logger.warning("Failed to record aider diff onto autofix state: %s", exc)
+        logger.info(
+            "AiderHarness captured diff (%d files, %d bytes) — Phase 2a logs only",
+            sum(1 for line in diff_str.splitlines() if line.startswith("diff --git ")),
+            len(diff_str),
+        )
+        logger.debug("aider diff:\n%s", diff_str)
 
     def _resolve_model_name(self) -> str:
         """Read AUTOFIX_HARNESS_MODEL from env (set via AppConfig).

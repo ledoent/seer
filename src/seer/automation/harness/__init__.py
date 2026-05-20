@@ -76,3 +76,14 @@ def select_orchestrator(harness_name: str, strict: bool = False) -> Type[Autofix
         raise HarnessNotAvailableError(msg)
     logger.warning("%s — falling back to 'builtin'.", msg)
     return _REGISTRY["builtin"]
+
+
+# Eagerly import optional harness modules so their import-time
+# register_harness() side-effects run. Wrapped in a try/except so a
+# missing optional dep (e.g. aider-chat not pip-installed) doesn't
+# break `from seer.automation.harness import select_orchestrator`
+# for the builtin path.
+try:
+    from . import aider as _aider  # noqa: F401, E402
+except ImportError as exc:  # pragma: no cover
+    logger.debug("Optional aider harness not importable: %s", exc)

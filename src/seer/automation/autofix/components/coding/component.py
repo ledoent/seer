@@ -7,7 +7,7 @@ from langfuse import observe
 from seer.automation.agent.agent import AgentConfig, RunConfig
 from seer.automation.agent.client import GeminiProvider, LlmClient
 from seer.automation.agent.models import Message, ToolCall
-from seer.automation.autofix.autofix_agent import AutofixAgent
+from seer.automation.autofix.autofix_agent import AutofixAgent  # noqa: F401
 from seer.automation.autofix.autofix_context import AutofixContext
 from seer.automation.autofix.components.coding.models import CodingOutput, CodingRequest
 from seer.automation.autofix.components.coding.prompts import CodingPrompts
@@ -15,6 +15,7 @@ from seer.automation.autofix.components.root_cause.models import RootCauseAnalys
 from seer.automation.autofix.prompts import format_repo_prompt
 from seer.automation.autofix.tools.tools import BaseTools
 from seer.automation.component import BaseComponent
+from seer.automation.harness import select_orchestrator
 from seer.configuration import AppConfig
 from seer.dependency_injection import inject, injected
 
@@ -141,7 +142,13 @@ class CodingComponent(BaseComponent[CodingRequest, CodingOutput]):
             if not memory:
                 memory = self._prefill_initial_memory(request=request)
 
-            agent = AutofixAgent(
+            # AUTOFIX_HARNESS=builtin (default) keeps AutofixAgent; "aider"
+            # delegates to the external coding harness. See harness/aider.py.
+            app_config = self._get_app_config()
+            agent_cls = select_orchestrator(
+                app_config.AUTOFIX_HARNESS, strict=app_config.AUTOFIX_HARNESS_STRICT
+            )
+            agent = agent_cls(
                 tools=tools.get_tools(include_claude_tools=True),
                 config=AgentConfig(interactive=True),
                 memory=memory,

@@ -110,12 +110,22 @@ from seer.automation.explorer.models import (
     AutofixPromptResponse,
     CodegenPrReviewRerunRequest,
     CodegenPrReviewRerunResponse,
+    CodeReviewCheckRerunRequest,
+    CodeReviewCheckRerunResponse,
+    CodeReviewPrClosedRequest,
+    CodeReviewPrClosedResponse,
+    CodeReviewRequestPayload,
+    CodeReviewRequestResponse,
     CodingAgentStateSetRequest,
     CodingAgentStateSetResponse,
     CodingAgentStateUpdateRequest,
     CodingAgentStateUpdateResponse,
     ExplorerChatRequest,
     ExplorerChatResponse,
+    ExplorerExportIndexesRequest,
+    ExplorerExportIndexesResponse,
+    ExplorerIndexRequest,
+    ExplorerIndexResponse,
     ExplorerRunsRequest,
     ExplorerRunsResponse,
     ExplorerStateRequest,
@@ -124,6 +134,7 @@ from seer.automation.explorer.models import (
     ExplorerUpdateResponse,
     LlmGenerateRequest,
     LlmGenerateResponse,
+    ModelsResponse,
     ProjectPreferenceBulkRequest,
     ProjectPreferenceBulkResponse,
     ProjectPreferenceBulkSetRequest,
@@ -1082,6 +1093,95 @@ def set_project_preference_bulk_endpoint(
 ) -> ProjectPreferenceBulkSetResponse:
     """Set bulk project preferences - stub for self-hosted."""
     return ProjectPreferenceBulkSetResponse(status="ok", message="Bulk preferences set")
+
+
+# ============================================
+# Stub endpoints for Sentry 26.5.0 API surface
+#
+# Sentry 26.5.0 introduced new code-review webhook callbacks, Launchpad
+# explorer indexing, and a /v1/models capability-discovery endpoint. The
+# fork doesn't run the real underlying features (we don't ship Launchpad,
+# code-review automation is upstream-cloud-only), but without these stubs
+# every Sentry-side request 404s — which surfaces in the UI as red error
+# banners ("Code review not available", "Failed to index knowledge") and
+# fills the worker log with noise.
+#
+# Each stub accepts arbitrary JSON (Config.extra = "allow" on the request
+# model) and returns a minimal success-or-not-available response so the
+# Sentry side sees a clean 200.
+# ============================================
+
+
+@json_api(blueprint, "/v1/code_review/check/rerun")
+def code_review_check_rerun_endpoint(
+    data: CodeReviewCheckRerunRequest,
+) -> CodeReviewCheckRerunResponse:
+    """Code-review check rerun webhook (Sentry 26.5.0+) — stub."""
+    return CodeReviewCheckRerunResponse()
+
+
+@json_api(blueprint, "/v1/code_review/pr-closed")
+def code_review_pr_closed_endpoint(
+    data: CodeReviewPrClosedRequest,
+) -> CodeReviewPrClosedResponse:
+    """PR-closed webhook (Sentry 26.5.0+) — stub, always 200."""
+    return CodeReviewPrClosedResponse()
+
+
+@json_api(blueprint, "/v1/code_review/review-request")
+def code_review_request_endpoint(
+    data: CodeReviewRequestPayload,
+) -> CodeReviewRequestResponse:
+    """Review-request webhook (Sentry 26.5.0+) — stub."""
+    return CodeReviewRequestResponse()
+
+
+@json_api(blueprint, "/v1/automation/explorer/index")
+def explorer_index_endpoint(data: ExplorerIndexRequest) -> ExplorerIndexResponse:
+    """Launchpad knowledge-indexing webhook (Sentry 26.5.0+) — stub."""
+    return ExplorerIndexResponse()
+
+
+@json_api(blueprint, "/v1/automation/explorer/index/org-repo-knowledge")
+def explorer_index_org_repo_endpoint(
+    data: ExplorerIndexRequest,
+) -> ExplorerIndexResponse:
+    """Launchpad org-repo-knowledge index webhook (Sentry 26.5.0+) — stub."""
+    return ExplorerIndexResponse()
+
+
+@json_api(blueprint, "/v1/automation/explorer/index/org-project-knowledge")
+def explorer_index_org_project_endpoint(
+    data: ExplorerIndexRequest,
+) -> ExplorerIndexResponse:
+    """Launchpad org-project-knowledge index webhook (Sentry 26.5.0+) — stub."""
+    return ExplorerIndexResponse()
+
+
+@json_api(blueprint, "/v1/automation/explorer/index/sentry-knowledge")
+def explorer_index_sentry_knowledge_endpoint(
+    data: ExplorerIndexRequest,
+) -> ExplorerIndexResponse:
+    """Launchpad sentry-knowledge index webhook (Sentry 26.5.0+) — stub."""
+    return ExplorerIndexResponse()
+
+
+@json_api(blueprint, "/v1/automation/explorer/export-indexes")
+def explorer_export_indexes_endpoint(
+    data: ExplorerExportIndexesRequest,
+) -> ExplorerExportIndexesResponse:
+    """Launchpad index-export webhook (Sentry 26.5.0+) — stub returning empty list."""
+    return ExplorerExportIndexesResponse()
+
+
+# /v1/models is a GET-shaped probe — Sentry calls it at startup to discover
+# model capabilities. Stub returns an empty list. The ExplorerIndexRequest
+# model is reused as the throwaway "request" type since both are
+# Config.extra="allow" pass-through Pydantic models.
+@json_api(blueprint, "/v1/models")
+def models_endpoint(data: ExplorerIndexRequest) -> ModelsResponse:
+    """Model capability discovery (Sentry 26.5.0+) — stub returning empty list."""
+    return ModelsResponse()
 
 
 # ============================================

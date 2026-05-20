@@ -1,6 +1,7 @@
 import json
 import textwrap
 
+import sentry_sdk
 from langfuse import observe
 from pydantic import BaseModel, model_validator
 
@@ -102,8 +103,11 @@ def find_steps_around_group_id(
 
 @observe(name="Single replay summary")
 @inject
-def run_single_replay_summary(replay: Replay, llm_client: LlmClient = injected) -> ReplaySummary:
-    replay_prompt = textwrap.dedent("""\
+def run_single_replay_summary(
+    replay: Replay, llm_client: LlmClient = injected
+) -> ReplaySummary | None:
+    replay_prompt = textwrap.dedent(
+        """\
         You are an exceptional developer that analyzes a replay of a user's interaction with an application and can summarize it in 1-2 sentences.
         {replay_data}
 
@@ -119,9 +123,8 @@ def run_single_replay_summary(replay: Replay, llm_client: LlmClient = injected) 
         - When mentioning an error, don't assume anything about what caused the error, just describe what the user was doing when they encountered the error.
         - Did the user continue after the error? Did they see an error message? Did they quit the application? Describe what they did in that case.
         - Be very specific about what the user did around an error, did a button trigger it? If yes then which, did it just happen when they navigated to a page? Describe what the user was doing around the error.
-        - Don't try to analyze the user's behavior, just describe what they did.""").format(
-        replay_data=json.dumps(replay.model_dump(mode="json"))
-    )
+        - Don't try to analyze the user's behavior, just describe what they did."""
+    ).format(replay_data=json.dumps(replay.model_dump(mode="json")))
 
     completion = llm_client.generate_structured(
         model=GeminiProvider.model("gemini-2.5-flash"),
@@ -130,6 +133,16 @@ def run_single_replay_summary(replay: Replay, llm_client: LlmClient = injected) 
         temperature=0.0,
     )
 
+    if completion.parsed is None:
+        # Defensive — Gemini Flash retries 3x and then returns parsed=None
+        # on persistent JSON-coercion failure. Without this guard the caller
+        # would NPE on .model_dump(). Mirror of the fix in summarize/issue.py.
+        sentry_sdk.capture_message(
+            "Gemini structured generation returned no parsed output",
+            level="warning",
+            contexts={"endpoint": {"name": "run_single_replay_summary"}},
+        )
+        return None
     return completion.parsed
 
 
@@ -153,8 +166,11 @@ def targeted_steps_to_string(replay_summary: ReplaySummary, target_group_id: int
 
 @observe(name="Cross session replay summary")
 @inject
-def run_cross_session_completion(all_steps: list[str], llm_client: LlmClient = injected):
-    replay_prompt = textwrap.dedent("""\
+def run_cross_session_completion(
+    all_steps: list[str], llm_client: LlmClient = injected
+) -> CommonReplaySummary | None:
+    replay_prompt = textwrap.dedent(
+        """\
         You are an exceptional developer that analyzes the replay of multiple users' interactions with an application and can understand the impact and common issues that occur.
         {all_steps}
 
@@ -171,9 +187,8 @@ def run_cross_session_completion(all_steps: list[str], llm_client: LlmClient = i
         3. Provide a 1-2 sentence summary of the impact the issue had on users.
         - Focus on the impact the marked issue in each step had on user
         - Did this cause the app to crash? Did an error message show? Did it show a blank page? What was the result of this error.
-        - Start with the actions to produce the issue, then explain the impact""").format(
-        all_steps=json.dumps(all_steps)
-    )
+        - Start with the actions to produce the issue, then explain the impact"""
+    ).format(all_steps=json.dumps(all_steps))
 
     completion = llm_client.generate_structured(
         model=GeminiProvider.model("gemini-2.5-flash"),
@@ -182,19 +197,40 @@ def run_cross_session_completion(all_steps: list[str], llm_client: LlmClient = i
         temperature=0.0,
     )
 
+    if completion.parsed is None:
+        sentry_sdk.capture_message(
+            "Gemini structured generation returned no parsed output",
+            level="warning",
+            contexts={"endpoint": {"name": "run_cross_session_completion"}},
+        )
+        return None
     return completion.parsed
 
 
 @observe(name="Summarize Replay for Issue")
 def summarize_replays(request: SummarizeReplaysRequest) -> SummarizeReplaysResponse:
-    replay_summaries = []
-    for replay in request.replays:
-        replay_summaries.append(run_single_replay_summary(replay))
+    # Skip replays that the Gemini structured-output retry exhausted on
+    # (run_single_replay_summary returns None in that case — see the
+    # capture_message inside). One bad replay shouldn't take down the
+    # whole batch.
+    replay_summaries = [s for s in (run_single_replay_summary(r) for r in request.replays) if s]
+
+    if not replay_summaries:
+        raise RuntimeError(
+            "Failed to summarize any replay in the batch — Gemini "
+            "structured generation returned no parsed output for all "
+            f"{len(request.replays)} replays"
+        )
 
     all_targeted_steps = [
         targeted_steps_to_string(summary, request.group_id) for summary in replay_summaries
     ]
 
     common_summary = run_cross_session_completion(all_targeted_steps)
+    if common_summary is None:
+        raise RuntimeError(
+            "Failed to generate cross-session replay summary — Gemini "
+            "structured generation returned no parsed output"
+        )
 
     return SummarizeReplaysResponse.from_parsed_model(common_summary)

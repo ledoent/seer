@@ -141,8 +141,16 @@ class CodingComponent(BaseComponent[CodingRequest, CodingOutput]):
             if not memory:
                 memory = self._prefill_initial_memory(request=request)
 
+            # include_claude_tools=False because self-hosted deployments run
+            # Gemini exclusively (PR #3 dropped Vertex Anthropic). The Claude
+            # text-editor tools are an Anthropic-only beta API and trip
+            # ValueError('Claude tools are not supported for Gemini') in
+            # agent/client.py the moment the coding step actually fires.
+            # The function-tools the AutofixAgent already has (file read/edit,
+            # repo search, etc.) cover the same ground in Gemini's
+            # tool-call format.
             agent = AutofixAgent(
-                tools=tools.get_tools(include_claude_tools=True),
+                tools=tools.get_tools(include_claude_tools=False),
                 config=AgentConfig(interactive=True),
                 memory=memory,
                 context=self.context,

@@ -48,13 +48,18 @@ _REGISTRY: dict[str, Type[AutofixOrchestrator]] = {
 def register_harness(name: str, cls: Type[AutofixOrchestrator]) -> None:
     """Used by harness modules at import time to register themselves.
 
-    Raises ``ValueError`` on duplicate registration so two modules can't
-    silently clobber each other.
+    Re-registering the same ``cls`` under the same ``name`` is a no-op
+    (pytest / module reloads commonly re-import). Registering a *different*
+    class under an existing name raises ``ValueError`` so two modules
+    can't silently clobber each other.
     """
-    if name in _REGISTRY:
+    existing = _REGISTRY.get(name)
+    if existing is cls:
+        return
+    if existing is not None:
         raise ValueError(
             f"Harness '{name}' is already registered as "
-            f"{_REGISTRY[name].__name__}; remove the duplicate registration."
+            f"{existing.__name__}; remove the duplicate registration."
         )
     _REGISTRY[name] = cls
 

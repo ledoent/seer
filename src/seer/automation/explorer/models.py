@@ -335,6 +335,92 @@ class ProjectPreferenceBulkSetResponse(BaseModel):
 
 
 # =============================================================================
+# Stub models for Sentry 26.5.0 endpoints — code review webhooks
+# Sentry 26.5.0's HTTP integration callbacks for the new code-review flow.
+# Self-hosted doesn't run real code-review; stubs prevent the 404s that
+# otherwise show up as "Code review not available" errors in the UI.
+# =============================================================================
+
+
+class CodeReviewCheckRerunRequest(BaseModel):
+    """Request to rerun a code-review check."""
+
+    class Config:
+        extra = "allow"
+
+
+class CodeReviewCheckRerunResponse(BaseModel):
+    status: Literal["ok", "not_available"] = "not_available"
+    message: str = "Code review check rerun not available in self-hosted mode"
+
+
+class CodeReviewPrClosedRequest(BaseModel):
+    """Webhook for PR-closed."""
+
+    class Config:
+        extra = "allow"
+
+
+class CodeReviewPrClosedResponse(BaseModel):
+    status: Literal["ok"] = "ok"
+
+
+class CodeReviewRequestPayload(BaseModel):
+    """Webhook for review-request."""
+
+    class Config:
+        extra = "allow"
+
+
+class CodeReviewRequestResponse(BaseModel):
+    status: Literal["ok", "not_available"] = "not_available"
+    message: str = "Code review request not available in self-hosted mode"
+
+
+# =============================================================================
+# Stub models for Sentry 26.5.0 endpoints — Launchpad / explorer indexing
+# Launchpad is the new task-worker service in 26.5.0 that triggers knowledge
+# indexing on seer. Without these stubs the indexing requests 404 and the
+# Launchpad UI shows "Failed to index knowledge".
+# =============================================================================
+
+
+class ExplorerIndexRequest(BaseModel):
+    """Generic explorer-index webhook payload."""
+
+    class Config:
+        extra = "allow"
+
+
+class ExplorerIndexResponse(BaseModel):
+    status: Literal["ok", "not_available"] = "ok"
+    message: str = "Explorer indexing not implemented in self-hosted mode"
+
+
+class ExplorerExportIndexesRequest(BaseModel):
+    """Webhook for exporting explorer indexes."""
+
+    class Config:
+        extra = "allow"
+
+
+class ExplorerExportIndexesResponse(BaseModel):
+    indexes: list[dict[str, Any]] = Field(default_factory=list)
+
+
+# =============================================================================
+# Stub model for Sentry 26.5.0 — capability discovery (/v1/models)
+# Sentry asks seer "what models do you support" at startup; without the
+# endpoint the UI shows "models unavailable" for the model picker. Empty
+# list is a valid response per the API contract.
+# =============================================================================
+
+
+class ModelsResponse(BaseModel):
+    models: list[dict[str, Any]] = Field(default_factory=list)
+
+
+# =============================================================================
 # Stub models for Sentry 26.2.0 endpoints
 # TODO: Implement proper handlers for these endpoints
 # =============================================================================

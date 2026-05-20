@@ -1130,7 +1130,7 @@ def test_smoke_test(celery_app: Celery, celery_worker: Worker):
 
     start_loading().join()
 
-    for i in range(10):
+    for _ in range(10):
         response = app.test_client().get("/health/ready")
         if response.status_code == 200:
             with Session() as session:
@@ -1142,7 +1142,7 @@ def test_smoke_test(celery_app: Celery, celery_worker: Worker):
             break
         time.sleep(1)
     else:
-        assert False, "Timed out, did not complete smoke check"
+        raise AssertionError("Timed out, did not complete smoke check")
 
 
 def test_async_loading():
@@ -1294,3 +1294,68 @@ class TestGetAutofixState:
         assert response.status_code == 200
         data = json.loads(response.get_data(as_text=True))
         assert data == {"group_id": None, "run_id": None, "state": None}
+
+    # ------------------------------------------------------------------
+    # Sentry 26.5.0 compatibility stubs
+    #
+    # These are guard tests — Sentry 26.5.0 calls these endpoints and
+    # without the stubs returns 404 to the UI. The stubs always return
+    # 200; the only thing under test is that the routes are registered
+    # and accept arbitrary JSON payloads (Config.extra = "allow" on the
+    # request models).
+    # ------------------------------------------------------------------
+
+    def _post_stub(self, path, payload=None):
+        return app.test_client().post(
+            path,
+            data=json.dumps(payload or {}),
+            content_type="application/json",
+        )
+
+    def test_stub_code_review_check_rerun(self):
+        r = self._post_stub("/v1/code_review/check/rerun", {"run_id": 42})
+        assert r.status_code == 200
+        assert json.loads(r.get_data(as_text=True))["status"] == "not_available"
+
+    def test_stub_code_review_pr_closed(self):
+        r = self._post_stub("/v1/code_review/pr-closed", {"pr_id": 99})
+        assert r.status_code == 200
+        assert json.loads(r.get_data(as_text=True))["status"] == "ok"
+
+    def test_stub_code_review_review_request(self):
+        r = self._post_stub("/v1/code_review/review-request", {"pr_id": 99})
+        assert r.status_code == 200
+        assert json.loads(r.get_data(as_text=True))["status"] == "not_available"
+
+    def test_stub_explorer_index(self):
+        r = self._post_stub("/v1/automation/explorer/index", {"org_id": 1})
+        assert r.status_code == 200
+        assert json.loads(r.get_data(as_text=True))["status"] == "ok"
+
+    def test_stub_explorer_index_org_repo_knowledge(self):
+        r = self._post_stub(
+            "/v1/automation/explorer/index/org-repo-knowledge",
+            {"org_id": 1, "repo_id": 5},
+        )
+        assert r.status_code == 200
+
+    def test_stub_explorer_index_org_project_knowledge(self):
+        r = self._post_stub(
+            "/v1/automation/explorer/index/org-project-knowledge",
+            {"org_id": 1, "project_id": 12},
+        )
+        assert r.status_code == 200
+
+    def test_stub_explorer_index_sentry_knowledge(self):
+        r = self._post_stub("/v1/automation/explorer/index/sentry-knowledge", {"org_id": 1})
+        assert r.status_code == 200
+
+    def test_stub_explorer_export_indexes(self):
+        r = self._post_stub("/v1/automation/explorer/export-indexes", {"org_id": 1})
+        assert r.status_code == 200
+        assert json.loads(r.get_data(as_text=True))["indexes"] == []
+
+    def test_stub_models(self):
+        r = self._post_stub("/v1/models", {})
+        assert r.status_code == 200
+        assert json.loads(r.get_data(as_text=True))["models"] == []

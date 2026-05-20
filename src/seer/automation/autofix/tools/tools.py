@@ -796,6 +796,113 @@ class BaseTools:
 
         return f"Error: Unknown command '{command}'"
 
+    def _gemini_edit_tools(self) -> list[FunctionTool]:
+        # Multi-repo runs require `repo_name:path` in the path field (see
+        # `_get_repo_name_and_path`). Single-repo runs accept either a bare
+        # path or a `repo_name:path` form. Tool descriptions reflect that
+        # to match the prompt guidance for Claude tools.
+        path_param = {
+            "name": "path",
+            "type": "string",
+            "description": (
+                "File path. For multi-repository runs, prefix with "
+                "`repo_name:`, e.g. `owner/repo:src/foo/bar.py`."
+            ),
+        }
+        return [
+            FunctionTool(
+                name="str_replace",
+                fn=lambda **kw: self.handle_claude_tools(command="str_replace", **kw),
+                description=(
+                    "Replace a unique block of text in an existing file. "
+                    "`old_str` must match exactly (including whitespace) and "
+                    "must be unique in the file. Prefer small, surgical "
+                    "replacements."
+                ),
+                parameters=[
+                    path_param,
+                    {
+                        "name": "old_str",
+                        "type": "string",
+                        "description": "Exact text to replace. Must be unique.",
+                    },
+                    {
+                        "name": "new_str",
+                        "type": "string",
+                        "description": "Replacement text.",
+                    },
+                ],
+                required=["path", "old_str", "new_str"],
+            ),
+            FunctionTool(
+                name="create_file",
+                fn=lambda **kw: self.handle_claude_tools(command="create", **kw),
+                description=(
+                    "Create a new file with the given content. Fails if the "
+                    "file already exists — use `str_replace` to modify an "
+                    "existing file."
+                ),
+                parameters=[
+                    path_param,
+                    {
+                        "name": "file_text",
+                        "type": "string",
+                        "description": "Full contents of the new file.",
+                    },
+                ],
+                required=["path", "file_text"],
+            ),
+            FunctionTool(
+                name="insert_text",
+                fn=lambda **kw: self.handle_claude_tools(command="insert", **kw),
+                description=(
+                    "Insert text after a given line number in an existing "
+                    "file. `insert_line=0` inserts at the very top."
+                ),
+                parameters=[
+                    path_param,
+                    {
+                        "name": "insert_line",
+                        "type": "integer",
+                        "description": "0-indexed line number after which to insert.",
+                    },
+                    {
+                        "name": "insert_text",
+                        "type": "string",
+                        "description": "Text to insert. Do not include a trailing newline.",
+                    },
+                ],
+                required=["path", "insert_line", "insert_text"],
+            ),
+            FunctionTool(
+                name="undo_edit",
+                fn=lambda **kw: self.handle_claude_tools(command="undo_edit", **kw),
+                description=(
+                    "Remove all pending edits made by this autofix run to a "
+                    "file. Use to back out a wrong change before retrying."
+                ),
+                parameters=[path_param],
+                required=["path"],
+            ),
+            FunctionTool(
+                name="view_file",
+                fn=lambda **kw: self.handle_claude_tools(command="view", **kw),
+                description=(
+                    "Show a file or directory. Pass `view_range=[start, end]` "
+                    "(1-indexed, inclusive) to view a slice of a file."
+                ),
+                parameters=[
+                    path_param,
+                    {
+                        "name": "view_range",
+                        "type": "array",
+                        "description": "Optional [start_line, end_line], 1-indexed.",
+                    },
+                ],
+                required=["path"],
+            ),
+        ]
+
     def _get_file_contents(self, path: str, repo_name: str) -> str:
         """Helper method to get file contents with proper error handling."""
         contents = self.context.get_file_contents(path, repo_name=repo_name)
@@ -1060,7 +1167,10 @@ class BaseTools:
         return "File changes undone successfully."
 
     def get_tools(
-        self, can_access_repos: bool = True, include_claude_tools: bool = False
+        self,
+        can_access_repos: bool = True,
+        include_claude_tools: bool = False,
+        include_edit_tools: bool = False,
     ) -> list[ClaudeTool | FunctionTool]:
         tools: list[ClaudeTool | FunctionTool] = [
             FunctionTool(
@@ -1088,6 +1198,13 @@ class BaseTools:
                     )
                 ]
             )
+        elif include_edit_tools:
+            # Gemini-compatible edit tools. The ClaudeTool above is an
+            # Anthropic-only beta API; when the caller wants edit capability
+            # on a non-Anthropic model, expose the same edit handlers as
+            # plain FunctionTools so the model has something to call other
+            # than hallucinated names.
+            tools.extend(self._gemini_edit_tools())
 
         if can_access_repos:
             tools.extend(
@@ -1323,8 +1440,15 @@ class BaseTools:
 
 class SemanticSearchTools(BaseTools):
     def get_tools(
-        self, can_access_repos: bool = True, include_claude_tools: bool = False
+        self,
+        can_access_repos: bool = True,
+        include_claude_tools: bool = False,
+        include_edit_tools: bool = False,
     ) -> list[ClaudeTool | FunctionTool]:
+        # SemanticSearchTools is read-only — `include_edit_tools` is accepted
+        # for signature parity with BaseTools.get_tools but intentionally
+        # ignored. No edit surface here.
+        del include_claude_tools, include_edit_tools
         if not can_access_repos:
             return []
 

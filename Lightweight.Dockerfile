@@ -38,6 +38,17 @@ ENV UV_HTTP_TIMEOUT=300
 RUN uv pip install --system torch==2.2.0 --index-url https://download.pytorch.org/whl/cpu
 RUN uv pip install --system -r requirements.txt
 
+# Aider has a sprawling dep graph (litellm, prompt-toolkit, gitpython, …)
+# that pins different versions of packages we already use. Install it in
+# a dedicated venv so its deps don't fight ours, then symlink the binary
+# onto PATH so `subprocess.run(["aider", ...])` in src/seer/automation/harness/
+# Just Works. Only loaded when AUTOFIX_HARNESS=aider; the default
+# AUTOFIX_HARNESS=builtin path never touches this venv.
+RUN python -m venv /opt/aider-venv \
+ && /opt/aider-venv/bin/pip install --no-cache-dir aider-chat==0.65.0 \
+ && ln -s /opt/aider-venv/bin/aider /usr/local/bin/aider \
+ && aider --version
+
 # Copy model files (assuming they are in the 'models' directory)
 COPY models/ models/
 # Copy scripts

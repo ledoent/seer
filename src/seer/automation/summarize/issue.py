@@ -167,6 +167,17 @@ def summarize_issue(
             raise
 
         issue_summary = completion.parsed
+        if issue_summary is None:
+            # Gemini Flash retries 3x internally for structured-output and then
+            # returns parsed=None on persistent JSON-coercion failure. Without
+            # this guard we'd NPE on .model_dump() — see ledoent/seer issue #45,
+            # 2941 events/24h before this guard landed.
+            sentry_sdk.capture_message(
+                "Gemini structured generation returned no parsed output",
+                level="warning",
+                contexts={"endpoint": {"name": "summarize_issue", "full_context": full_context}},
+            )
+            return None
         return IssueSummaryWithScores(
             **issue_summary.model_dump(),
             scores=SummarizeIssueScores(

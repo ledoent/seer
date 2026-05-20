@@ -1,6 +1,7 @@
 import textwrap
 from venv import logger
 
+import sentry_sdk
 from google.genai.errors import ClientError
 from langfuse import observe
 from pydantic import BaseModel
@@ -65,6 +66,17 @@ def summarize_trace(
         raise
 
     trace_summary = completion.parsed
+    if trace_summary is None:
+        # summarize_trace's contract is non-Optional, so raise rather than
+        # silently returning a placeholder. Mirror of the fix in
+        # summarize/issue.py — Gemini Flash retries internally and returns
+        # parsed=None on persistent JSON-coercion failure.
+        sentry_sdk.capture_message(
+            "Gemini structured generation returned no parsed output",
+            level="warning",
+            contexts={"endpoint": {"name": "summarize_trace", "trace_id": request.trace_id}},
+        )
+        raise RuntimeError("Gemini returned no parsed output for trace summary")
 
     return SummarizeTraceResponse(
         trace_id=request.trace_id,
@@ -79,7 +91,8 @@ def _get_prompt(trace_str: str, only_transactions: bool) -> str:
 
     prompt = ""
     if only_transactions:
-        prompt = textwrap.dedent(f"""
+        prompt = textwrap.dedent(
+            f"""
             You are a principal performance engineer who is excellent at explaining concepts simply to engineers of all levels. Our traces have a lot of dense information that is hard to understand quickly. Please provide key insights about the trace below so our engineers can immediately understand what's going on.
             Please note that the engineers have access to the same information as you do, so please do not state any obvious high level information about the trace and its spans.
 
@@ -135,9 +148,11 @@ def _get_prompt(trace_str: str, only_transactions: bool) -> str:
             <trace>
             {trace_str}
             </trace>
-            """)
+            """
+        )
     else:
-        prompt = textwrap.dedent(f"""
+        prompt = textwrap.dedent(
+            f"""
             You are a principal performance engineer who is excellent at explaining concepts simply to engineers of all levels. Our traces have a lot of dense information that is hard to understand quickly. Please provide key insights about the trace below so our engineers can immediately understand what's going on.
             Please note that the engineers have access to the same information as you do, so please do not state any obvious high level information about the trace and its spans.
 
@@ -191,6 +206,7 @@ def _get_prompt(trace_str: str, only_transactions: bool) -> str:
             <trace>
             {trace_str}
             </trace>
-            """)
+            """
+        )
 
     return prompt

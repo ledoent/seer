@@ -162,6 +162,35 @@ class TestSummarizeIssue:
         assert "bar details" in mock_llm_client.generate_structured.call_args[1]["prompt"]
         assert "baz details" in mock_llm_client.generate_structured.call_args[1]["prompt"]
 
+    def test_summarize_issue_returns_none_when_llm_parsed_is_none(
+        self, mock_llm_client, sample_request
+    ):
+        """Regression guard for issue #45 — Gemini Flash retries 3x internally
+        and returns parsed=None on persistent JSON-coercion failure. The
+        summarize endpoints must not NPE on .model_dump() in that case.
+
+        Before this guard landed the issue fired 2941 times in 24h.
+        """
+        # First call: full_context=True returns parsed=None — guard kicks in,
+        # the function returns None, and the outer summarize_issue retries
+        # with full_context=False. Second call also returns None, so the
+        # outer function raises an explicit error rather than NPE-ing.
+        mock_llm_client.generate_structured.return_value = LlmGenerateStructuredResponse(
+            parsed=None,
+            metadata=LlmResponseMetadata(
+                model="test-model",
+                provider_name=LlmProviderType.GEMINI,
+                usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+            ),
+        )
+
+        with pytest.raises(Exception, match="even after retrying"):
+            summarize_issue(sample_request, llm_client=mock_llm_client)
+
+        # And critically: it did NOT raise AttributeError on None.model_dump()
+        # — the guard caught it before reaching .model_dump().
+        assert mock_llm_client.generate_structured.call_count == 2
+
 
 class TestRunSummarizeIssue:
     @patch("seer.automation.summarize.issue.summarize_issue")

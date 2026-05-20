@@ -9,6 +9,8 @@ from google.genai.errors import ClientError
 # from google.genai.types import Respons
 from requests import Response
 
+from seer.automation.agent.client import LlmGenerateStructuredResponse, LlmResponseMetadata
+from seer.automation.agent.models import LlmProviderType, Usage
 from seer.automation.models import EAPTrace
 from seer.automation.summarize.models import (
     SpanInsight,
@@ -99,4 +101,21 @@ class TestSummarizeTrace:
         mock_llm_client.generate_structured.side_effect = Exception("Some other test issue")
 
         with pytest.raises(Exception, match="Some other test issue"):
+            summarize_trace(sample_request, mock_llm_client)
+
+    def test_summarize_trace_raises_when_llm_parsed_is_none(self, sample_request, mock_llm_client):
+        """Regression guard for the same Gemini-Flash parsed=None path that
+        fixed seer #45. summarize_trace's return contract is non-Optional,
+        so we raise RuntimeError loudly rather than NPE on .model_dump().
+        """
+        mock_llm_client.generate_structured.return_value = LlmGenerateStructuredResponse(
+            parsed=None,
+            metadata=LlmResponseMetadata(
+                model="gemini-2.5-flash",
+                provider_name=LlmProviderType.GEMINI,
+                usage=Usage(prompt_tokens=10, completion_tokens=0, total_tokens=10),
+            ),
+        )
+
+        with pytest.raises(RuntimeError, match="no parsed output"):
             summarize_trace(sample_request, mock_llm_client)

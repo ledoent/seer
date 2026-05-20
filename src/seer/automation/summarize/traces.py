@@ -1,5 +1,5 @@
+import logging
 import textwrap
-from venv import logger
 
 import sentry_sdk
 from google.genai.errors import ClientError
@@ -13,6 +13,8 @@ from seer.automation.summarize.models import (
     SummarizeTraceResponse,
 )
 from seer.dependency_injection import inject, injected
+
+logger = logging.getLogger(__name__)
 
 
 class TraceSummaryForLlmToGenerate(BaseModel):

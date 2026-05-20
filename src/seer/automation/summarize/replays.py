@@ -103,7 +103,9 @@ def find_steps_around_group_id(
 
 @observe(name="Single replay summary")
 @inject
-def run_single_replay_summary(replay: Replay, llm_client: LlmClient = injected) -> ReplaySummary:
+def run_single_replay_summary(
+    replay: Replay, llm_client: LlmClient = injected
+) -> ReplaySummary | None:
     replay_prompt = textwrap.dedent(
         """\
         You are an exceptional developer that analyzes a replay of a user's interaction with an application and can summarize it in 1-2 sentences.
@@ -164,7 +166,9 @@ def targeted_steps_to_string(replay_summary: ReplaySummary, target_group_id: int
 
 @observe(name="Cross session replay summary")
 @inject
-def run_cross_session_completion(all_steps: list[str], llm_client: LlmClient = injected):
+def run_cross_session_completion(
+    all_steps: list[str], llm_client: LlmClient = injected
+) -> CommonReplaySummary | None:
     replay_prompt = textwrap.dedent(
         """\
         You are an exceptional developer that analyzes the replay of multiple users' interactions with an application and can understand the impact and common issues that occur.
@@ -205,14 +209,28 @@ def run_cross_session_completion(all_steps: list[str], llm_client: LlmClient = i
 
 @observe(name="Summarize Replay for Issue")
 def summarize_replays(request: SummarizeReplaysRequest) -> SummarizeReplaysResponse:
-    replay_summaries = []
-    for replay in request.replays:
-        replay_summaries.append(run_single_replay_summary(replay))
+    # Skip replays that the Gemini structured-output retry exhausted on
+    # (run_single_replay_summary returns None in that case — see the
+    # capture_message inside). One bad replay shouldn't take down the
+    # whole batch.
+    replay_summaries = [s for s in (run_single_replay_summary(r) for r in request.replays) if s]
+
+    if not replay_summaries:
+        raise RuntimeError(
+            "Failed to summarize any replay in the batch — Gemini "
+            "structured generation returned no parsed output for all "
+            f"{len(request.replays)} replays"
+        )
 
     all_targeted_steps = [
         targeted_steps_to_string(summary, request.group_id) for summary in replay_summaries
     ]
 
     common_summary = run_cross_session_completion(all_targeted_steps)
+    if common_summary is None:
+        raise RuntimeError(
+            "Failed to generate cross-session replay summary — Gemini "
+            "structured generation returned no parsed output"
+        )
 
     return SummarizeReplaysResponse.from_parsed_model(common_summary)

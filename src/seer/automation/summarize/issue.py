@@ -64,6 +64,57 @@ class IssueSummaryWithScores(IssueSummary):
         )
 
 
+def _is_gemini_quota_exhausted(exc: Exception) -> bool:
+    """Detect Vertex `429 RESOURCE_EXHAUSTED` quota-exhaustion exceptions.
+
+    The google-genai SDK can surface quota errors as `ClientError(code=429)`
+    or as a bare exception whose `str()` carries one of the canonical
+    quota-exhausted strings — both forms are seen in production. Matching
+    the message keeps us robust to SDK changes between versions.
+    """
+    quota_markers = (
+        "429 RESOURCE_EXHAUSTED",
+        "Resource exhausted. Please try again later.",
+        "Quota exceeded",
+        "RESOURCE_EXHAUSTED",
+    )
+    if any(m in str(exc) for m in quota_markers):
+        return True
+    code = getattr(exc, "code", None)
+    if code == 429:
+        return True
+    status_code = getattr(exc, "status_code", None)
+    if status_code == 429:
+        return True
+    return False
+
+
+def _degraded_summary(request: SummarizeIssueRequest) -> "IssueSummaryWithScores":
+    """Fallback summary returned when Vertex quota is exhausted.
+
+    Keeps the contract intact (Sentry-side expects a usable response)
+    while making it obvious in the UI that the AI step was skipped. All
+    confidence/novelty scores land at 0.0 so any downstream gates
+    (autofix proceed-confidence, etc.) treat it as low signal.
+    """
+    title = (request.issue.title or "")[:120] or "Issue summary unavailable"
+    return IssueSummaryWithScores(
+        title=title,
+        whats_wrong=(
+            "Issue summary skipped because the AI quota was momentarily exhausted. "
+            "Refresh the issue in a minute or so to retry."
+        ),
+        session_related_issues="",
+        possible_cause="",
+        possible_cause_novelty_score=0.0,
+        possible_cause_confidence_score=0.0,
+        scores=SummarizeIssueScores(
+            possible_cause_confidence=0.0,
+            possible_cause_novelty=0.0,
+        ),
+    )
+
+
 class IssueSummaryForLlmToGenerate(BaseModel):
     whats_wrong: str
     session_related_issues: str
@@ -164,6 +215,19 @@ def summarize_issue(
             # Only retry if the error is context-limit-related
             if "token" in str(e).lower():
                 return None
+            if _is_gemini_quota_exhausted(e):
+                # Vertex 429 RESOURCE_EXHAUSTED. Raising propagates a 500 to
+                # Sentry-side, which retries the seer-RPC call N times, ties
+                # up a worker per retry, and snowballs into a retry storm
+                # that takes seer down for every other endpoint. Return a
+                # degraded but valid IssueSummary instead so the storm
+                # collapses at its source.
+                sentry_sdk.set_tag("summarize_issue.quota_exhausted", True)
+                sentry_sdk.capture_message(
+                    "Gemini quota exhausted in summarize_issue — returning degraded summary",
+                    level="warning",
+                )
+                return _degraded_summary(request)
             raise
 
         issue_summary = completion.parsed

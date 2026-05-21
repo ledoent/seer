@@ -192,6 +192,87 @@ class TestSummarizeIssue:
         assert mock_llm_client.generate_structured.call_count == 2
 
 
+class TestSummarizeIssueQuotaDegradation:
+    """Vertex 429 RESOURCE_EXHAUSTED used to bubble out as 500 → Sentry's
+    seer-rpc retried → each retry tied up a worker → entire seer was
+    unreachable for autofix dispatch + other endpoints until quota
+    recovered. The fix catches the 429 at the source and returns a
+    degraded summary so the storm collapses immediately.
+    """
+
+    @pytest.fixture
+    def sample_request(self):
+        issues_dir = Path(__file__).parent / "fixtures" / "issues"
+        issues: list[IssueDetails] = []
+        for path in issues_dir.glob("issue_to_summarize*.json"):
+            with path.open() as f:
+                issues.append(IssueDetails.model_validate_json(f.read()))
+        return SummarizeIssueRequest(
+            group_id=0,
+            issue=issues[0],
+            connected_issues=[],
+        )
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            Exception("429 RESOURCE_EXHAUSTED: quota project foo"),
+            Exception("Resource exhausted. Please try again later."),
+            Exception("Quota exceeded for quota metric ..."),
+            # Bare-class form with a `code` attribute set to 429
+            type("ClientErr", (Exception,), {"code": 429})("vertex limit hit"),
+            # Bare-class form with status_code
+            type("StatusErr", (Exception,), {"status_code": 429})("rate limited"),
+        ],
+        ids=[
+            "msg-429-RESOURCE_EXHAUSTED",
+            "msg-resource-exhausted",
+            "msg-quota-exceeded",
+            "code-429",
+            "status_code-429",
+        ],
+    )
+    def test_returns_degraded_summary_on_quota_exhaustion(self, sample_request, exc):
+        mock_llm_client = Mock()
+        mock_llm_client.generate_structured.side_effect = exc
+
+        result = summarize_issue(sample_request, llm_client=mock_llm_client)
+
+        assert isinstance(result, IssueSummaryWithScores)
+        # Degraded marker — UI shows the user that the summary was skipped
+        assert "quota" in result.whats_wrong.lower()
+        # All confidence scores at 0 so downstream gates treat as low-signal
+        assert result.scores.possible_cause_confidence == 0.0
+        assert result.scores.possible_cause_novelty == 0.0
+        # The original issue title carries forward as the summary title
+        assert result.title  # not empty
+        # And critically: only ONE LLM call was made (no internal retry storm)
+        assert mock_llm_client.generate_structured.call_count == 1
+
+    def test_non_quota_exception_still_propagates(self, sample_request):
+        """Quota-aware degradation must not swallow unrelated errors."""
+        mock_llm_client = Mock()
+        mock_llm_client.generate_structured.side_effect = RuntimeError(
+            "some other failure unrelated to quota"
+        )
+
+        with pytest.raises(RuntimeError, match="unrelated to quota"):
+            summarize_issue(sample_request, llm_client=mock_llm_client)
+
+    def test_token_error_still_takes_token_path(self, sample_request):
+        """The existing context-too-long retry path is unchanged."""
+        mock_llm_client = Mock()
+        mock_llm_client.generate_structured.side_effect = Exception(
+            "input token count exceeds limit"
+        )
+
+        with pytest.raises(Exception, match="even after retrying"):
+            summarize_issue(sample_request, llm_client=mock_llm_client)
+        # Token errors trigger the existing full_context retry loop:
+        # one call with full context, one without → 2 total.
+        assert mock_llm_client.generate_structured.call_count == 2
+
+
 class TestRunSummarizeIssue:
     @patch("seer.automation.summarize.issue.summarize_issue")
     @patch("seer.automation.summarize.issue.Session")

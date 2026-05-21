@@ -41,7 +41,6 @@ class SolutionPrompts:
               - "Module Y not installed" / "addon Z not found" → seed data, `addons_path`, registry state
               - "Connection refused" / read/write timeout → networking, service availability, DNS
               - Repeated identical errors at startup of a process → likely a config issue triggering a retry loop, not a code bug
-              - Multi-database error patterns (errors mention several DB names that look like dev fixtures) → operator state, not code
 
             Symptoms that DO usually map to source-code fixes — propose a code change:
               - `AttributeError` / `KeyError` on internal attributes/keys → genuine missing-attr or rename

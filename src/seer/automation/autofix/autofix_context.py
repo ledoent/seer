@@ -376,6 +376,15 @@ class AutofixContext(PipelineContext):
         # triage instead of opening drive-by PRs that look like progress
         # but address the wrong problem. Default threshold 0.7; set to 0.0
         # to disable.
+        #
+        # confidence=None means the solution step didn't run (or ran but
+        # didn't populate the score — older runs, manual handoff paths,
+        # restart-from-point flows that bypass the confidence component).
+        # We FAIL OPEN in that case: the gate only fires on observed low
+        # confidence, not on absence-of-signal. Treating None as low
+        # would break existing manual handoff and rethink paths that
+        # never compute a score. If you want to fail closed instead,
+        # raise the question in a follow-up — it's a deliberate choice.
         solution_step = state.solution_step
         confidence = solution_step.proceed_confidence_score if solution_step is not None else None
         if (

@@ -125,7 +125,7 @@ jobs:
   # Replay-only cassette test that exercises CodingComponent end-to-end
   # against the just-published image. Skips upstream's full pytest matrix
   # (gated on GCP_SA_KEY / GH_PAT we don't have on the fork) and runs the
-  # one Tier-2 test we ship in this fork — see PR #13 + #14.
+  # one Tier-2 test we ship in this fork — see PR #13.
   test-cassette-replay:
     needs: build-and-push
     runs-on: ubuntu-latest
@@ -143,14 +143,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Resolve image tag
+      - name: Resolve image ref
         id: image
         run: |
           SHA_SHORT=$(git rev-parse --short HEAD)
-          echo "tag=lightweight-${SHA_SHORT}" >> "$GITHUB_OUTPUT"
+          REF="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:lightweight-${SHA_SHORT}"
+          echo "ref=${REF}" >> "$GITHUB_OUTPUT"
 
       - name: Pull image
-        run: docker pull "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.image.outputs.tag }}"
+        run: docker pull "${{ steps.image.outputs.ref }}"
 
       - name: Run cassette test (replay only)
         run: |
@@ -163,7 +164,7 @@ jobs:
             -e DATABASE_URL=postgresql+psycopg://noop/noop \
             -e CELERY_BROKER_URL=amqp://noop \
             -e GOOGLE_CLOUD_PROJECT=noop -e SENTRY_REGION=us \
-            "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.image.outputs.tag }}" \
+            "${{ steps.image.outputs.ref }}" \
             pytest tests/automation/autofix/components/coding/test_coding_gemini_e2e.py -xvs
 
       - name: Summary
@@ -172,7 +173,7 @@ jobs:
           {
             echo "### Cassette replay :clapper:"
             echo ""
-            echo "Image: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.image.outputs.tag }}\`"
+            echo "Image: \`${{ steps.image.outputs.ref }}\`"
             echo "Test: \`tests/automation/autofix/components/coding/test_coding_gemini_e2e.py\`"
             echo "Mode: replay (CI=1 forces vcr record_mode=none)"
           } >> "$GITHUB_STEP_SUMMARY"

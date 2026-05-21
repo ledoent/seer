@@ -630,6 +630,164 @@ class TestAutofixContextPrCommit(unittest.TestCase):
         self.assertEqual(changes_step.changes[0].pull_request.pr_url, "http://test.com")
         self.assertEqual(changes_step.changes[0].pull_request.pr_id, 123)
 
+    @patch("seer.automation.codebase.repo_client.RepoClient")
+    def test_commit_changes_low_confidence_skips_pr(self, mock_RepoClient):
+        """PR #18 confidence gate: when solution_step.proceed_confidence_score
+        is below AUTOFIX_PR_MIN_CONFIDENCE (default 0.7), the branch + diff
+        still get produced but no PR is opened. Avoids drive-by PRs from
+        low-confidence runs that the prompt's diagnosis taxonomy or
+        confidence-calibration sections couldn't catch upstream.
+        """
+        from seer.automation.autofix.models import SolutionStep
+        from seer.configuration import AppConfig
+        from seer.dependency_injection import Module
+
+        mock_repo_client = MagicMock()
+        mock_branch_ref = MagicMock(ref="test_branch")
+        mock_repo_client.create_branch_from_changes.return_value = mock_branch_ref
+        mock_repo_client.provider = "github"
+        mock_RepoClient.from_repo_definition.return_value = mock_repo_client
+
+        with self.state.update() as cur:
+            cur.codebases = {
+                "1": CodebaseState(
+                    repo_external_id="1",
+                    file_changes=[
+                        FileChange(
+                            path="test.py",
+                            reference_snippet="test",
+                            change_type="edit",
+                            new_snippet="test2",
+                            description="test",
+                        )
+                    ],
+                )
+            }
+            cur.steps = [
+                SolutionStep(
+                    key="solution",
+                    title="Solution",
+                    type=StepType.SOLUTION,
+                    status=AutofixStatus.COMPLETED,
+                    index=0,
+                    proceed_confidence_score=0.3,  # well below default 0.7 threshold
+                ),
+                ChangesStep(
+                    key="changes",
+                    title="changes_title",
+                    type=StepType.CHANGES,
+                    status=AutofixStatus.PROCESSING,
+                    index=1,
+                    changes=[
+                        CodebaseChange(
+                            repo_external_id="1",
+                            repo_name="test",
+                            title="This is the title",
+                            description="This is the description",
+                        )
+                    ],
+                ),
+            ]
+
+        self.autofix_context.repos = [
+            RepoDefinition(
+                provider="github",
+                owner="getsentry",
+                name="name",
+                external_id="1",
+            )
+        ]
+
+        # Override AppConfig with default threshold (0.7) for the duration of
+        # this call. The conftest's AppConfig may have AUTOFIX_PR_MIN_CONFIDENCE
+        # at a different value.
+        module = Module()
+        module.constant(AppConfig, AppConfig(AUTOFIX_PR_MIN_CONFIDENCE=0.7))
+        with module:
+            self.autofix_context.commit_changes(make_pr=True)
+
+        # Branch SHOULD still be created (the diff is real, a human can review)
+        mock_repo_client.create_branch_from_changes.assert_called_once()
+        # PR creation MUST be skipped
+        mock_repo_client.create_pr_from_branch.assert_not_called()
+
+    @patch("seer.automation.codebase.repo_client.RepoClient")
+    def test_commit_changes_high_confidence_proceeds(self, mock_RepoClient):
+        """Mirror of the low-confidence test: when proceed_confidence_score
+        is above the threshold, PR creation runs as before. Guards against
+        the gate firing on every run by mistake.
+        """
+        from seer.automation.autofix.models import SolutionStep
+        from seer.configuration import AppConfig
+        from seer.dependency_injection import Module
+
+        mock_repo_client = MagicMock()
+        mock_branch_ref = MagicMock(ref="test_branch")
+        mock_repo_client.create_branch_from_changes.return_value = mock_branch_ref
+        mock_pr = MagicMock(number=1, html_url="http://test.com", id=123)
+        mock_repo_client.create_pr_from_branch.return_value = mock_pr
+        mock_repo_client.provider = "github"
+        mock_repo_client.get_branch_ref.return_value = mock_branch_ref
+        mock_RepoClient.from_repo_definition.return_value = mock_repo_client
+
+        with self.state.update() as cur:
+            cur.codebases = {
+                "1": CodebaseState(
+                    repo_external_id="1",
+                    file_changes=[
+                        FileChange(
+                            path="test.py",
+                            reference_snippet="test",
+                            change_type="edit",
+                            new_snippet="test2",
+                            description="test",
+                        )
+                    ],
+                )
+            }
+            cur.steps = [
+                SolutionStep(
+                    key="solution",
+                    title="Solution",
+                    type=StepType.SOLUTION,
+                    status=AutofixStatus.COMPLETED,
+                    index=0,
+                    proceed_confidence_score=0.9,  # above default 0.7 threshold
+                ),
+                ChangesStep(
+                    key="changes",
+                    title="changes_title",
+                    type=StepType.CHANGES,
+                    status=AutofixStatus.PROCESSING,
+                    index=1,
+                    changes=[
+                        CodebaseChange(
+                            repo_external_id="1",
+                            repo_name="test",
+                            title="This is the title",
+                            description="This is the description",
+                        )
+                    ],
+                ),
+            ]
+
+        self.autofix_context.repos = [
+            RepoDefinition(
+                provider="github",
+                owner="getsentry",
+                name="name",
+                external_id="1",
+            )
+        ]
+
+        module = Module()
+        module.constant(AppConfig, AppConfig(AUTOFIX_PR_MIN_CONFIDENCE=0.7))
+        with module:
+            self.autofix_context.commit_changes(make_pr=True)
+
+        mock_repo_client.create_branch_from_changes.assert_called_once()
+        mock_repo_client.create_pr_from_branch.assert_called_once()
+
 
 class TestGetFileContents(unittest.TestCase):
     def setUp(self):

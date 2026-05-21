@@ -32,6 +32,47 @@ class SolutionPrompts:
             Touching infrastructure, dependencies, or third party libraries is almost never desirable.
             </solution_guidelines>
 
+            <diagnosis_taxonomy>
+            Before proposing code changes, classify the symptom. Many errors look like code bugs but are actually environment, config, state, or operator problems where a code change is the wrong fix.
+
+            Symptoms that almost never map to source-code fixes — propose an INVESTIGATION (not a code change):
+              - "Uninitialized database X" / "database X does not exist" → odoo config (`list_db`, `db_filter`), seed data, or a leftover dev DB
+              - "Permission denied" on a file/DB/socket → user/role/grant config, mount permissions, container uid
+              - "Module Y not installed" / "addon Z not found" → seed data, `addons_path`, registry state
+              - "Connection refused" / read/write timeout → networking, service availability, DNS
+              - Repeated identical errors at startup of a process → likely a config issue triggering a retry loop, not a code bug
+              - Multi-database error patterns (errors mention several DB names that look like dev fixtures) → operator state, not code
+
+            Symptoms that DO usually map to source-code fixes — propose a code change:
+              - `AttributeError` / `KeyError` on internal attributes/keys → genuine missing-attr or rename
+              - Specific value-error patterns like "invalid field 'X' on model 'Y'" → field rename/removal in our code
+              - `IntegrityError` / `UniqueViolation` → genuine constraint violation in our SQL or model
+              - Type errors, off-by-one, null dereference where the stack trace points at a concrete branch
+
+            If the symptom falls in the first group, the correct output is a short investigation plan (files/config/state worth checking, 2-3 candidate hypotheses) — NOT a SOLUTION with code-change steps.
+            </diagnosis_taxonomy>
+
+            <confidence_calibration>
+            Be honest about confidence. The summary you provide drives a downstream gate: if confidence is low, the autofix pipeline will skip PR creation in favor of human triage.
+
+            Avoid weasel words in the solution summary: "likely", "may", "presumably", "should", "probably", "I think". They signal you don't know. If you find yourself reaching for them, the right answer is usually an investigation outcome, not a code change.
+
+            Reserve a high-confidence solution for cases where you can state ALL THREE:
+              1. The exact file + function/line where the change goes.
+              2. A specific, named cause that the change neutralizes (not "an issue with X" — actually name the broken behavior).
+              3. A reason the change preserves the rest of the function's intended behavior.
+
+            If any of those three is missing, the solution is exploratory — present hypotheses to investigate, not a plan to implement.
+            </confidence_calibration>
+
+            <repo_context>
+            For ledoent/OpenUpgrade and other openupgrade-lab forks of OCA projects:
+              - `openupgrade_framework/odoo_patch/` is monkey patches that override Odoo core. Edits there are runtime overrides for ALL Odoo, not module-local. Prefer NOT to edit unless the bug is explicitly in the patched function itself.
+              - The lab uses bind-mounted sources (`./openupgrade:/opt/openupgrade`, openupgradelib at `.../site-packages/openupgradelib`); errors can surface from either tree depending on which the running process imports.
+              - Multi-DB symptoms (errors referencing `repro_a`, `seed_*`, `openupgrade_test`, etc.) usually reflect operator state (the dev's `make reset` history, a stale CNPG namespace) — not a code bug.
+              - Commit/PR convention on these repos: title `[<series>][TAG] <scope>: <summary>` where TAG ∈ `[OU-FIX]`, `[OU-ADD]`, `[OU-IMP]`, `[MIG]`; branch `<series>-fix-<scope>` for FIX, `<series>-mig-<scope>` for MIG.
+            </repo_context>
+
             Remember:
             - EVERY TIME before you use a tool, think step-by-step.
             - You also MUST think step-by-step before giving the final answer.

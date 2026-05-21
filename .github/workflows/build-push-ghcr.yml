@@ -121,3 +121,114 @@ jobs:
             echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:lightweight"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Replay-only cassette test that exercises CodingComponent end-to-end
+  # against the just-published image. Skips upstream's full pytest matrix
+  # (gated on GCP_SA_KEY / GH_PAT we don't have on the fork) and runs the
+  # one Tier-2 test we ship in this fork — see PR #13.
+  test-cassette-replay:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image ref
+        id: image
+        run: |
+          SHA_SHORT=$(git rev-parse --short HEAD)
+          REF="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:lightweight-${SHA_SHORT}"
+          echo "ref=${REF}" >> "$GITHUB_OUTPUT"
+
+      - name: Pull image
+        run: docker pull "${{ steps.image.outputs.ref }}"
+
+      - name: Verify cassette is in checkout
+        run: |
+          CASSETTE=tests/automation/autofix/components/coding/cassettes/test_coding_step_calls_at_least_one_edit_tool.yaml
+          if [ ! -s "$CASSETTE" ]; then
+            echo "::error::Cassette file missing or empty at $CASSETTE" >&2
+            ls -la tests/automation/autofix/components/coding/cassettes/ || true
+            exit 1
+          fi
+          echo "Cassette present: $(wc -c < $CASSETTE) bytes"
+
+      - name: Mint a fake SA key for ADC
+        # The google-auth library needs *some* credentials to even form the
+        # OAuth refresh request. In replay mode VCR intercepts that request
+        # and serves the canned OAuth response from the cassette — but only
+        # if the library got far enough to make the call. Without any
+        # credentials it raises DefaultCredentialsError before VCR sees a
+        # thing. A minimally-valid SA key file with a fake RSA key
+        # satisfies the file parser; the cassette serves the rest.
+        run: |
+          openssl genrsa -out /tmp/fake.pem 2048 2>/dev/null
+          KEY=$(python3 -c "import json; print(json.dumps(open('/tmp/fake.pem').read()))")
+          cat > /tmp/fake-sa-key.json <<EOF
+          {
+            "type": "service_account",
+            "project_id": "kendall-ledo",
+            "private_key_id": "fake0000000000000000000000000000000000fake",
+            "private_key": ${KEY},
+            "client_email": "seer-vertex-fake@kendall-ledo.iam.gserviceaccount.com",
+            "client_id": "000000000000000000000",
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/seer-vertex-fake%40kendall-ledo.iam.gserviceaccount.com",
+            "universe_domain": "googleapis.com"
+          }
+          EOF
+          chmod 600 /tmp/fake-sa-key.json
+
+      - name: Run cassette test (replay only)
+        # 5-min hard timeout: locally the replay finishes in <5s. If it
+        # hangs on GHA (e.g. Google auth metadata-server probe blocking
+        # despite vcr replay mode), surface the failure fast instead of
+        # eating the full 6h job budget.
+        timeout-minutes: 5
+        run: |
+          # --entrypoint pytest bypasses /app/entrypoint.sh which runs
+          # `flask db upgrade heads` then exec's supervisord; that script
+          # ignores CMD args, so without overriding the entrypoint our
+          # pytest command never actually runs.
+          # Mount the fake SA at the path conftest.py's autouse
+          # configure_environment fixture forces GOOGLE_APPLICATION_CREDENTIALS
+          # to when CI=1. That env-override happens at session start so we
+          # can't bypass it with a plain `-e GOOGLE_APPLICATION_CREDENTIALS=`.
+          docker run --rm --entrypoint pytest \
+            -v "$(pwd)/src:/app/src" \
+            -v "$(pwd)/tests:/app/tests" \
+            -v "$(pwd)/pyproject.toml:/app/pyproject.toml" \
+            -v /tmp/fake-sa-key.json:/app/tests/test_gcloud_credentials.json:ro \
+            -w /app \
+            -e DEV=1 -e CI=1 -e NO_SENTRY_INTEGRATION=1 -e NO_REAL_MODELS=1 \
+            -e DATABASE_URL=postgresql+psycopg://noop/noop \
+            -e CELERY_BROKER_URL=memory:// \
+            -e CELERY_TASK_ALWAYS_EAGER=true \
+            -e GOOGLE_CLOUD_PROJECT=kendall-ledo -e SENTRY_REGION=us \
+            -e NO_GCE_CHECK=true \
+            -e GCE_METADATA_HOST=metadata.google.internal.invalid \
+            "${{ steps.image.outputs.ref }}" \
+            tests/automation/autofix/components/coding/test_coding_gemini_e2e.py -xvs
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Cassette replay :clapper:"
+            echo ""
+            echo "Image: \`${{ steps.image.outputs.ref }}\`"
+            echo "Test: \`tests/automation/autofix/components/coding/test_coding_gemini_e2e.py\`"
+            echo "Mode: replay (CI=1 forces vcr record_mode=none)"
+          } >> "$GITHUB_STEP_SUMMARY"

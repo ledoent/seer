@@ -13,6 +13,13 @@ concurrency:
 jobs:
   build_and_push:
     runs-on: ubuntu-latest
+    # Skip on the ledoent fork: this workflow builds a `cache-${sha}` image
+    # via `docker buildx bake` and runs the full upstream pytest matrix,
+    # gated on GCP_SA_KEY + GH_PAT + CODECOV_TOKEN secrets we don't have.
+    # The fork runs a lightweight cassette-replay job inside
+    # build-push-ghcr.yml instead. Workflow stays in the tree so upstream
+    # rebases don't conflict.
+    if: github.repository == 'getsentry/seer'
     permissions:
       contents: "read"
       id-token: "write"
@@ -54,6 +61,7 @@ jobs:
   typecheck:
     needs: [build_and_push]
     runs-on: ubuntu-latest
+    if: github.repository == 'getsentry/seer'
     permissions:
       contents: "read"
       id-token: "write"
@@ -85,6 +93,7 @@ jobs:
     name: Parallelized Tests
     needs: [build_and_push]
     runs-on: ubuntu-latest
+    if: github.repository == 'getsentry/seer'
     permissions:
       contents: "read"
       id-token: "write"
@@ -175,7 +184,7 @@ jobs:
     name: ${{ github.event_name == 'push' && 'Finish Tests (Main)' || 'Finish Tests' }}
     needs: [test, typecheck]
     runs-on: ubuntu-latest
-    if: always()
+    if: always() && github.repository == 'getsentry/seer'
     steps:
       - name: Check test results
         run: |

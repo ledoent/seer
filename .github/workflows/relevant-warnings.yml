@@ -12,7 +12,14 @@ jobs:
     name: Relevant Warnings
     runs-on: ubuntu-latest
     continue-on-error: true
-    if: github.event.pull_request.draft == false
+    # Skip on the ledoent fork: Overwatch CLI (overwatch.codecov.io/linux/cli)
+    # is a sentry-internal endpoint that requires a Codecov enterprise token
+    # the fork doesn't have, so the curl returns an HTML/XML AccessDenied
+    # body and the bash script trips on "syntax error near unexpected token
+    # `<'". The check then renders red on every PR for purely cosmetic
+    # reasons and obscures real failures. The workflow stays in the tree
+    # so upstream rebases don't conflict.
+    if: github.repository == 'getsentry/seer' && github.event.pull_request.draft == false
 
     steps:
       - name: Checkout

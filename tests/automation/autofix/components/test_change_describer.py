@@ -51,6 +51,26 @@ class TestChangeDescriptionPrompts:
         msg = ChangeDescriptionPrompts.format_default_msg(change_dump="diff")
         assert "'fix:'" in msg
 
+    def test_empty_title_format_hint_falls_through_to_previous_commits(self):
+        # RepoProfile.title_format_hint docstring explicitly allows empty
+        # string ("Leave empty to let the agent pick its own format.").
+        # Pin the contract: empty hint behaves like no hint at all — previous
+        # commits are consulted, falling back to the generic `fix:` default.
+        msg = ChangeDescriptionPrompts.format_default_msg(
+            change_dump="diff",
+            previous_commits=["feat(api): add x"],
+            title_format_hint="",
+        )
+        assert "feat(api): add x" in msg
+        assert "'fix:'" not in msg
+
+    def test_empty_title_format_hint_with_no_previous_commits_uses_fix_default(self):
+        msg = ChangeDescriptionPrompts.format_default_msg(
+            change_dump="diff",
+            title_format_hint="",
+        )
+        assert "'fix:'" in msg
+
 
 def _ok_response(title: str, branch: str) -> LlmGenerateStructuredResponse:
     return LlmGenerateStructuredResponse(

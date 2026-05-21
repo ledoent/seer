@@ -223,3 +223,35 @@ def test_coding_step_calls_at_least_one_edit_tool(coding_context, coding_request
         f"Tools called: {sorted(called_tool_names)}. "
         f"Edit tools expected: {sorted(edit_tool_names)}."
     )
+
+    # Anti-drift assertion (PR #17). Run #12 on the live VM after PR #16
+    # opened a real draft PR — but the diff was `import tools` instead of
+    # the planned ir_module_module table-existence check. The model
+    # substituted a smaller, easier-to-apply intervention for the planned
+    # fix. The original assertion above passes for that case because
+    # `str_replace` was called and even succeeded; what it doesn't catch
+    # is that the diff doesn't implement the plan.
+    #
+    # Assert that at least one edit-tool argument contains the keyword
+    # `ir_module_module` (the central symbol from the selected solution
+    # in our fixture). If the model lands `import tools` or any other
+    # adjacent-but-wrong edit, the keyword is absent and the test fails.
+    expected_keyword = "ir_module_module"
+    edit_tool_call_args = [
+        (m.tool_call_function, t.args)
+        for m in captured_memory
+        if m.tool_calls
+        for t in m.tool_calls
+        if t.function in edit_tool_names
+    ]
+    on_plan = [
+        (fn, args[:200]) for fn, args in edit_tool_call_args if expected_keyword in (args or "")
+    ]
+    assert on_plan, (
+        f"Coding agent applied edit tools but none of the edits implement "
+        f"the planned solution (keyword `{expected_keyword}` from the "
+        f"fixture's selected solution was not in any edit-tool args). "
+        f"Edit calls observed: "
+        f"{[(fn, (args or '')[:80]) for fn, args in edit_tool_call_args]}. "
+        f"This is the 'solution drift' regression from run #12."
+    )

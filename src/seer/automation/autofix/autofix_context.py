@@ -1,4 +1,3 @@
-import functools
 import logging
 import textwrap
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -32,6 +31,7 @@ from seer.automation.pipeline import PipelineContext
 from seer.automation.state import State
 from seer.automation.summarize.issue import IssueSummaryWithScores
 from seer.automation.utils import AgentError
+from seer.configuration import AppConfig
 from seer.db import DbIssueSummary, DbPrIdToAutofixRunIdMapping, DbRunMemory, Session
 from seer.dependency_injection import copy_modules_initializer, inject, injected
 from seer.rpc import RpcClient
@@ -353,11 +353,13 @@ class AutofixContext(PipelineContext):
 
             changes_step.changes[changes_state_index] = change_state
 
+    @inject
     def commit_changes(
         self,
         repo_external_id: str | None = None,
         make_pr: bool = False,
         pr_to_comment_on_url: str | None = None,
+        app_config: AppConfig = injected,
     ):
         state = self.state.get()
 
@@ -367,6 +369,39 @@ class AutofixContext(PipelineContext):
             if root_cause_step and root_cause_step.causes
             else None
         )
+
+        # Confidence gate: if the solution step's proceed-confidence is
+        # below AUTOFIX_PR_MIN_CONFIDENCE, produce the branch + diff but
+        # do NOT open a PR. Surfaces low-confidence runs to humans for
+        # triage instead of opening drive-by PRs that look like progress
+        # but address the wrong problem. Default threshold 0.7; set to 0.0
+        # to disable.
+        #
+        # confidence=None means the solution step didn't run (or ran but
+        # didn't populate the score — older runs, manual handoff paths,
+        # restart-from-point flows that bypass the confidence component).
+        # We FAIL OPEN in that case: the gate only fires on observed low
+        # confidence, not on absence-of-signal. Treating None as low
+        # would break existing manual handoff and rethink paths that
+        # never compute a score. If you want to fail closed instead,
+        # raise the question in a follow-up — it's a deliberate choice.
+        solution_step = state.solution_step
+        confidence = solution_step.proceed_confidence_score if solution_step is not None else None
+        if (
+            make_pr
+            and app_config.AUTOFIX_PR_MIN_CONFIDENCE > 0.0
+            and confidence is not None
+            and confidence < app_config.AUTOFIX_PR_MIN_CONFIDENCE
+        ):
+            logger.warning(
+                "Skipping PR creation: solution proceed_confidence_score=%.3f "
+                "below AUTOFIX_PR_MIN_CONFIDENCE=%.3f. Branch + diff still "
+                "produced so a human can review.",
+                confidence,
+                app_config.AUTOFIX_PR_MIN_CONFIDENCE,
+            )
+            sentry_sdk.set_tag("autofix.pr_skipped_low_confidence", True)
+            make_pr = False
 
         for codebase_state in state.codebases.values():
             if repo_external_id is None or codebase_state.repo_external_id == repo_external_id:
@@ -535,8 +570,15 @@ class AutofixContext(PipelineContext):
             pr_url, state.run_id, state.request.issue.id, markdown_comment
         )
 
-    @functools.lru_cache(maxsize=8)
     def get_org_slug(self, organization_id: int) -> str | None:
+        # Per-instance cache. Previously `@functools.lru_cache` on a bound
+        # method, which holds `self` for the cache's lifetime — flake8-bugbear
+        # B019. Plain dict on the instance keeps the same one-call-per-org
+        # behavior without the leak; AutofixContext is per-run-id so the
+        # cache dies with the run.
+        cache = self.__dict__.setdefault("_org_slug_cache", {})
+        if organization_id in cache:
+            return cache[organization_id]
         slug: str | None = None
         try:
             response = self.sentry_client.call("get_organization_slug", org_id=organization_id)
@@ -550,6 +592,7 @@ class AutofixContext(PipelineContext):
             logger.exception(e)
             sentry_sdk.capture_exception(e)
             slug = None
+        cache[organization_id] = slug
         return slug
 
     def make_file_patches(

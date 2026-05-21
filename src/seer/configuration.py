@@ -109,6 +109,10 @@ class AppConfig(BaseModel):
     AUTOFIXABILITY_SCORING_ENABLED: ParseBool = False
     AUTOFIX_ENABLED: ParseBool = False
     AUTOFIX_BACKFILL_ENABLED: ParseBool = False
+    # PR-creation gate: if the solution step's proceed-confidence is below
+    # this threshold, autofix produces the branch + diff but does NOT open a
+    # GitHub PR. Default 0.7. Set to 0.0 to disable the gate entirely.
+    AUTOFIX_PR_MIN_CONFIDENCE: ParseFloat = 0.7
     GRPC_SERVER_ENABLE: ParseBool = False
     HOSTNAME: str = Field(default_factory=gethostname)
 

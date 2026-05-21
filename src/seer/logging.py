@@ -30,6 +30,12 @@ def setup_logger(logger: logging.Logger):
                 "AFC is enabled",  # Google genai library logs this
                 "AFC remote call",  # Google genai library logs this
                 "Item exceeds size limit",  # Langfuse
+                # Self-hosted deployments run without a Langfuse server.
+                # When LANGFUSE_PUBLIC_KEY is empty the SDK emits these
+                # WARNINGs on every `@observe` invocation; in the autofix
+                # coding loop that floods the logs at ~50 lines/s.
+                "Langfuse client initialized without public_key",
+                "No active span in current context",
             ]
         )
     )

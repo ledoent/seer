@@ -1614,3 +1614,50 @@ class TestExpandDocument:
         # Assert
         assert "Error: Repo 'test/repo' not found" in result
         assert "valid/repo" in result
+
+
+class TestGeminiEditTools:
+    """Cover the Gemini-compatible edit FunctionTools that wrap handle_claude_tools."""
+
+    def test_get_tools_excludes_edit_tools_by_default(self, autofix_tools: BaseTools):
+        names = {t.name for t in autofix_tools.get_tools()}
+        assert "str_replace" not in names
+        assert "create_file" not in names
+        assert "insert_text" not in names
+        assert "undo_edit" not in names
+        assert "view_file" not in names
+
+    def test_get_tools_includes_edit_tools_when_flag_set(self, autofix_tools: BaseTools):
+        names = {t.name for t in autofix_tools.get_tools(include_edit_tools=True)}
+        assert {"str_replace", "create_file", "insert_text", "undo_edit", "view_file"} <= names
+
+    def test_get_tools_claude_takes_precedence_over_edit_flag(self, autofix_tools: BaseTools):
+        # If both flags are set, claude tools win and gemini tools stay out.
+        # This keeps the legacy SaaS path bit-identical.
+        names = {
+            t.name
+            for t in autofix_tools.get_tools(include_claude_tools=True, include_edit_tools=True)
+        }
+        assert "str_replace_editor" in names
+        assert "str_replace" not in names
+
+    @pytest.mark.parametrize(
+        "tool_name,kwargs,expected_command",
+        [
+            ("str_replace", {"path": "test.py", "old_str": "a", "new_str": "b"}, "str_replace"),
+            ("create_file", {"path": "new.py", "file_text": "x"}, "create"),
+            ("insert_text", {"path": "test.py", "insert_line": 0, "insert_text": "x"}, "insert"),
+            ("undo_edit", {"path": "test.py"}, "undo_edit"),
+            ("view_file", {"path": "test.py"}, "view"),
+        ],
+    )
+    def test_edit_tool_dispatches_to_handle_claude_tools(
+        self, autofix_tools: BaseTools, tool_name, kwargs, expected_command
+    ):
+        autofix_tools.handle_claude_tools = MagicMock(return_value="ok")
+        tool = next(t for t in autofix_tools._gemini_edit_tools() if t.name == tool_name)
+        result = tool.call(**kwargs)
+        assert result == "ok"
+        autofix_tools.handle_claude_tools.assert_called_once_with(
+            command=expected_command, **kwargs
+        )

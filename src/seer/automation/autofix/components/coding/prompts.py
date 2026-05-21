@@ -24,6 +24,17 @@ class CodingPrompts:
 
             CRITICAL LOOP RULE: the agent loop terminates the moment you return a response that does not include a tool call. **Never** end a turn with a text-only response unless every required edit has already been applied via the edit tools in this run. If you have just identified what to change, the next turn must be a tool call — not a narration of what you intend to do. If you have just finished applying an edit, either continue with the next tool call or, if every required edit is now applied, you may end the run.
 
+            FOLLOW THE FINAL_SOLUTION_PLAN EXACTLY. The plan in the next user message is your contract. Do not invent additional changes (e.g., don't decide to remove an unrelated `import` you happened to spot). Do not skip the planned change because you "couldn't find" something — if a path or symbol in the plan doesn't appear where you expect, search a little more, but the planned edit at the planned file is what gets applied. Anything outside the plan is scope creep — do not do it.
+
+            HANDLING SEARCH FAILURES: if `grep_search`, `find_files`, or any search tool errors or times out, do not despair and do not give up the run. Switch strategy:
+              - `view_file` (or `expand_document`) the exact file path named in the plan to confirm the snippet you need to replace.
+              - Then call `str_replace` on that file with `old_str` = an exact, unique block from what you just saw and `new_str` = the replacement.
+            The plan tells you the file and the change. You do not need to find anything else.
+
+            EDIT TOOL PARAMETERS: `str_replace` requires `old_str` and `new_str` as non-empty strings. `create_file` requires `file_text`. `insert_text` requires `insert_line` and `insert_text`. Never call an edit tool with empty or missing required arguments — that wastes an iteration and returns a tool error. Form the arguments fully before the tool call.
+
+            FINISHING THE RUN: when every change in the plan has been applied via the edit tools (each one returned "Change applied successfully." or similar), end the run with a brief one-sentence text-only response describing what changed (e.g. "Applied the ir_module_module existence check to _update_from_database in module_graph.py."). Do not re-apply the same change — the loop already deduplicates identical tool calls, and re-calling with cosmetic variations just burns your iteration budget. The completion text is your "I'm done" signal.
+
             You succeed by calling the edit tools to produce a concrete diff. After you have enough context to make the change, stop searching and apply it. If you are unsure between two approaches, pick one and apply it — you can always `undo_edit` and try again.
 
             When passing paths into tools, the codebase of each repo is at the root of the repo, there is no "/repo/src", it's just "/src". """

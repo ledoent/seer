@@ -817,19 +817,30 @@ class BaseTools:
                     "Replace a unique block of text in an existing file. "
                     "`old_str` must match exactly (including whitespace) and "
                     "must be unique in the file. Prefer small, surgical "
-                    "replacements."
+                    "replacements. Both `old_str` and `new_str` are required "
+                    "and must be non-empty strings — calling with empty or "
+                    "missing arguments returns a tool error and wastes an "
+                    "iteration."
                 ),
                 parameters=[
                     path_param,
                     {
                         "name": "old_str",
                         "type": "string",
-                        "description": "Exact text to replace. Must be unique.",
+                        "description": (
+                            "Exact text to replace. Must be non-empty, must "
+                            "match the file byte-for-byte (including "
+                            "indentation), and must be unique in the file."
+                        ),
                     },
                     {
                         "name": "new_str",
                         "type": "string",
-                        "description": "Replacement text.",
+                        "description": (
+                            "Replacement text. Must be non-empty. Pass the "
+                            "intended full replacement; do not pass a diff "
+                            "or a marker like `...`."
+                        ),
                     },
                 ],
                 required=["path", "old_str", "new_str"],

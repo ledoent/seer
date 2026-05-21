@@ -13,6 +13,7 @@ from seer.automation.autofix.components.root_cause.models import RootCauseAnalys
 from seer.automation.autofix.components.solution.models import SolutionOutput, SolutionRequest
 from seer.automation.autofix.components.solution.prompts import SolutionPrompts
 from seer.automation.autofix.prompts import format_repo_prompt
+from seer.automation.autofix.repo_profiles import get_first_matching_profile
 from seer.automation.autofix.tools.tools import BaseTools
 from seer.automation.component import BaseComponent
 from seer.configuration import AppConfig
@@ -122,6 +123,8 @@ class SolutionComponent(BaseComponent[SolutionRequest, SolutionOutput]):
 
             has_tools = bool(readable_repos)
             repos_str = format_repo_prompt(readable_repos, unreadable_repos)
+            repo_profile = get_first_matching_profile(readable_repos)
+            repo_familiarity_notes = repo_profile.familiarity_notes if repo_profile else None
 
             agent = AutofixAgent(
                 tools=tools.get_tools() if has_tools else None,
@@ -174,7 +177,9 @@ class SolutionComponent(BaseComponent[SolutionRequest, SolutionOutput]):
                 response = agent.run(
                     run_config=RunConfig(
                         system_prompt=SolutionPrompts.format_system_msg(
-                            repos_str=repos_str, has_tools=has_tools
+                            repos_str=repos_str,
+                            has_tools=has_tools,
+                            repo_familiarity_notes=repo_familiarity_notes,
                         ),
                         memory_storage_key="solution",
                         run_name="Solution Discovery",

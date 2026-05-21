@@ -13,6 +13,7 @@ from seer.automation.autofix.components.coding.models import CodingOutput, Codin
 from seer.automation.autofix.components.coding.prompts import CodingPrompts
 from seer.automation.autofix.components.root_cause.models import RootCauseAnalysisItem
 from seer.automation.autofix.prompts import format_repo_prompt
+from seer.automation.autofix.repo_profiles import get_first_matching_profile
 from seer.automation.autofix.tools.tools import BaseTools
 from seer.automation.component import BaseComponent
 from seer.configuration import AppConfig
@@ -155,8 +156,8 @@ class CodingComponent(BaseComponent[CodingRequest, CodingOutput]):
                 name="Code",
             )
 
+            state = self.context.state.get()
             if not request.initial_memory:
-                state = self.context.state.get()
                 agent.add_user_message(
                     CodingPrompts.format_fix_msg(
                         custom_solution=custom_solution,
@@ -173,9 +174,14 @@ class CodingComponent(BaseComponent[CodingRequest, CodingOutput]):
                     ),
                 )
 
+            coding_profile = get_first_matching_profile(state.readable_repos)
+            coding_familiarity_notes = coding_profile.familiarity_notes if coding_profile else None
+
             response = agent.run(
                 RunConfig(
-                    system_prompt=CodingPrompts.format_system_msg(),
+                    system_prompt=CodingPrompts.format_system_msg(
+                        repo_familiarity_notes=coding_familiarity_notes
+                    ),
                     memory_storage_key="code",
                     run_name="Code",
                     max_iterations=64,

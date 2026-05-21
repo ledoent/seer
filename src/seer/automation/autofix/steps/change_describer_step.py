@@ -88,6 +88,7 @@ class AutofixChangeDescriberStep(AutofixPipelineStep):
                         ChangeDescriptionRequest(
                             change_dump=diff_str,
                             previous_commits=previous_commits,
+                            repo_full_name=repo_definition.full_name,
                         )
                     )
 

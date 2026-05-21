@@ -167,7 +167,8 @@ jobs:
             -w /app \
             -e DEV=1 -e CI=1 -e NO_SENTRY_INTEGRATION=1 -e NO_REAL_MODELS=1 \
             -e DATABASE_URL=postgresql+psycopg://noop/noop \
-            -e CELERY_BROKER_URL=amqp://noop \
+            -e CELERY_BROKER_URL=memory:// \
+            -e CELERY_TASK_ALWAYS_EAGER=true \
             -e GOOGLE_CLOUD_PROJECT=noop -e SENTRY_REGION=us \
             -e NO_GCE_CHECK=true \
             -e GCE_METADATA_HOST=metadata.google.internal.invalid \

@@ -13,7 +13,12 @@ from seer.automation.models import EventDetails
 
 class CodingPrompts:
     @staticmethod
-    def format_system_msg():
+    def format_system_msg(repo_familiarity_notes: str | None = None):
+        repo_context_block = (
+            f"REPO CONTEXT — read before any edit:\n{repo_familiarity_notes}\n\n"
+            if repo_familiarity_notes
+            else ""
+        )
         return textwrap.dedent(
             """\
             You are an exceptional principal engineer that is amazing at finding and fixing issues in codebases.
@@ -33,9 +38,7 @@ class CodingPrompts:
               2. SYMBOL USAGE. If you add an `import`, the imported symbol(s) MUST appear in the resulting file body. If you remove a usage, the import should come out too. Mentally run `pyflakes` against your changed file before finishing.
               3. FILE TARGETING. The file printing the stack trace is rarely the file that needs the fix when the error is about MISSING STATE — "database X doesn't exist", "table Y missing", "module Z not installed", "config K not set" almost always live in config/state/migration code, not in the source file emitting the error. If the plan's target file feels wrong for the symptom class, surface that doubt in your text outcome instead of editing the wrong file.
 
-            REPO CONTEXT — openupgrade/openupgrade-lab. The `openupgrade_framework/odoo_patch/` directory contains monkey patches that override Odoo core behavior at import time. Edits there are runtime overrides for ALL Odoo, not normal module logic. Proceed with extreme caution: edit only if the bug is explicitly in the patched function itself. For symptoms like missing-table or non-Odoo-DB errors, the fix is more often in odoo config (`list_db`, `db_filter`), seed-data, or operator state (a stale dev DB from `make reset`) than in the monkey-patch source.
-
-            HANDLING SEARCH FAILURES: if `grep_search`, `find_files`, or any search tool errors or times out, do not despair and do not give up the run. Switch strategy:
+            {repo_context_block}HANDLING SEARCH FAILURES: if `grep_search`, `find_files`, or any search tool errors or times out, do not despair and do not give up the run. Switch strategy:
               - `view_file` (or `expand_document`) the exact file path named in the plan to confirm the snippet you need to replace.
               - Then call `str_replace` on that file with `old_str` = an exact, unique block from what you just saw and `new_str` = the replacement.
             The plan tells you the file and the change. You do not need to find anything else.
@@ -49,7 +52,7 @@ class CodingPrompts:
             You succeed by calling the edit tools to produce a concrete diff. After you have enough context to make the change, stop searching and apply it. If you are unsure between two approaches, pick one and apply it — you can always `undo_edit` and try again.
 
             When passing paths into tools, the codebase of each repo is at the root of the repo, there is no "/repo/src", it's just "/src". """
-        )
+        ).format(repo_context_block=repo_context_block)
 
     @staticmethod
     def format_extra_root_cause_instruction(instruction: str):

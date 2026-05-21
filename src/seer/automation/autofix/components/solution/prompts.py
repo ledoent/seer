@@ -8,7 +8,14 @@ from seer.automation.models import Profile, TraceTree
 
 class SolutionPrompts:
     @staticmethod
-    def format_system_msg(repos_str: str, has_tools: bool):
+    def format_system_msg(
+        repos_str: str, has_tools: bool, repo_familiarity_notes: str | None = None
+    ):
+        repo_context_block = (
+            f"<repo_context>\n{repo_familiarity_notes}\n</repo_context>\n\n"
+            if repo_familiarity_notes
+            else ""
+        )
         return textwrap.dedent(
             """\
             You are Seer, a powerful agentic AI debugging assistant designed by Sentry, the world's leading platform for helping developers debug their code.
@@ -64,15 +71,7 @@ class SolutionPrompts:
             If any of those three is missing, the solution is exploratory — present hypotheses to investigate, not a plan to implement.
             </confidence_calibration>
 
-            <repo_context>
-            For ledoent/OpenUpgrade and other openupgrade-lab forks of OCA projects:
-              - `openupgrade_framework/odoo_patch/` is monkey patches that override Odoo core. Edits there are runtime overrides for ALL Odoo, not module-local. Prefer NOT to edit unless the bug is explicitly in the patched function itself.
-              - The lab uses bind-mounted sources (`./openupgrade:/opt/openupgrade`, openupgradelib at `.../site-packages/openupgradelib`); errors can surface from either tree depending on which the running process imports.
-              - Multi-DB symptoms (errors referencing `repro_a`, `seed_*`, `openupgrade_test`, etc.) usually reflect operator state (the dev's `make reset` history, a stale CNPG namespace) — not a code bug.
-              - Commit/PR convention on these repos: title `[<series>][TAG] <scope>: <summary>` where TAG ∈ `[OU-FIX]`, `[OU-ADD]`, `[OU-IMP]`, `[MIG]`; branch `<series>-fix-<scope>` for FIX, `<series>-mig-<scope>` for MIG.
-            </repo_context>
-
-            Remember:
+            {repo_context_block}Remember:
             - EVERY TIME before you use a tool, think step-by-step.
             - You also MUST think step-by-step before giving the final answer.
             - If the USER provides additional instructions or guidance throughout the conversation, you MUST pay close attention and follow it, as they know the codebase better than you do and your goal is to satisfy the USER.
@@ -86,6 +85,7 @@ class SolutionPrompts:
                 else "You do not have to ability to gather more context at this point. You must come up with the best solution you can based on what you know so far."
             ),
             repos_str=repos_str,
+            repo_context_block=repo_context_block,
         )
 
     @staticmethod

@@ -118,6 +118,16 @@ push-staging:
 	sentry-cli releases set-commits "${SEER_STAGING_VERSION_SHA}" --auto || true
 
 
+CODING_E2E_TEST:=tests/automation/autofix/components/coding/test_coding_gemini_e2e.py
+
+.PHONY: iterate-coding
+iterate-coding: # Tier 2 dev loop — replay cassette to see how the coding agent uses tools (fast, no network)
+	pytest $(CODING_E2E_TEST) -xvs
+
+.PHONY: record-coding
+record-coding: # Re-record the coding-step cassette via a real Gemini call. Needs ADC + GOOGLE_CLOUD_PROJECT.
+	pytest $(CODING_E2E_TEST) -xvs --record-mode=rewrite
+
 .PHONY: vcr-encrypt-prep
 vcr-encrypt-prep:
 	pip install -r scripts/requirements.txt

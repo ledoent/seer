@@ -126,7 +126,7 @@ iterate-coding: # Tier 2 dev loop — replay cassette to see how the coding agen
 
 .PHONY: record-coding
 record-coding: # Re-record the coding-step cassette via a real Gemini call. Needs ADC + GOOGLE_CLOUD_PROJECT.
-	pytest $(CODING_E2E_TEST) -xvs --record-mode=rewrite
+	pytest $(CODING_E2E_TEST) -xvs --vcr-record=all
 
 .PHONY: vcr-encrypt-prep
 vcr-encrypt-prep:

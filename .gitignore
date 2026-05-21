@@ -151,6 +151,11 @@ dmypy.json
 
 # Cassettes
 tests/**/cassettes/
+# Exception: the Tier 2 coding-loop cassette is plaintext-in-repo on this
+# private fork (no production secrets — pytest-vcr filters strip OAuth
+# JWT + Authorization headers per test_coding_gemini_e2e.py + tests/conftest.py).
+!tests/automation/autofix/components/coding/cassettes/
+!tests/automation/autofix/components/coding/cassettes/*.yaml
 
 # Local config files
 CLAUDE.md

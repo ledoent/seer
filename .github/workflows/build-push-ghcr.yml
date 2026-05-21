@@ -160,7 +160,11 @@ jobs:
         # eating the full 6h job budget.
         timeout-minutes: 5
         run: |
-          docker run --rm \
+          # --entrypoint pytest bypasses /app/entrypoint.sh which runs
+          # `flask db upgrade heads` then exec's supervisord; that script
+          # ignores CMD args, so without overriding the entrypoint our
+          # pytest command never actually runs.
+          docker run --rm --entrypoint pytest \
             -v "$(pwd)/src:/app/src" \
             -v "$(pwd)/tests:/app/tests" \
             -v "$(pwd)/pyproject.toml:/app/pyproject.toml" \
@@ -173,7 +177,7 @@ jobs:
             -e NO_GCE_CHECK=true \
             -e GCE_METADATA_HOST=metadata.google.internal.invalid \
             "${{ steps.image.outputs.ref }}" \
-            pytest tests/automation/autofix/components/coding/test_coding_gemini_e2e.py -xvs
+            tests/automation/autofix/components/coding/test_coding_gemini_e2e.py -xvs
 
       - name: Summary
         if: always()

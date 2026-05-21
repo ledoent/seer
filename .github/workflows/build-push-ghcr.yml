@@ -154,6 +154,11 @@ jobs:
         run: docker pull "${{ steps.image.outputs.ref }}"
 
       - name: Run cassette test (replay only)
+        # 5-min hard timeout: locally the replay finishes in <5s. If it
+        # hangs on GHA (e.g. Google auth metadata-server probe blocking
+        # despite vcr replay mode), surface the failure fast instead of
+        # eating the full 6h job budget.
+        timeout-minutes: 5
         run: |
           docker run --rm \
             -v "$(pwd)/src:/app/src" \
@@ -164,6 +169,8 @@ jobs:
             -e DATABASE_URL=postgresql+psycopg://noop/noop \
             -e CELERY_BROKER_URL=amqp://noop \
             -e GOOGLE_CLOUD_PROJECT=noop -e SENTRY_REGION=us \
+            -e NO_GCE_CHECK=true \
+            -e GCE_METADATA_HOST=metadata.google.internal.invalid \
             "${{ steps.image.outputs.ref }}" \
             pytest tests/automation/autofix/components/coding/test_coding_gemini_e2e.py -xvs
 

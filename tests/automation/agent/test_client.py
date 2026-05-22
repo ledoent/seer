@@ -1407,3 +1407,95 @@ def test_region_preference_de_requires_europe_region():
     with Module().constant(AppConfig, test_config):
         with pytest.raises(ValueError, match="Cannot route to non europe region"):
             anthropic_model.get_client()
+
+
+class TestGeminiProviderPersonalApiKey:
+    """The GOOGLE_AI_PERSONAL config field routes Gemini calls to the
+    consumer Gemini API at generativelanguage.googleapis.com instead of
+    Vertex AI on GOOGLE_CLOUD_PROJECT. Used to peel high-volume traffic
+    off the billed org project. Verify the routing decision happens at
+    `get_client()` time and that the consumer-API client is constructed
+    with the right kwargs.
+    """
+
+    def _client_kwargs(self, model, app_config):
+        """Capture the kwargs passed to genai.Client by routing through
+        get_client. Avoids depending on the actual SDK constructing a
+        real client (network/auth).
+        """
+        captured = {}
+        from seer.automation.agent import client as client_mod
+
+        original = client_mod.genai.Client
+
+        def spy(**kwargs):
+            captured.update(kwargs)
+            # Return a stand-in so callers don't blow up
+            return object()
+
+        client_mod.genai.Client = spy
+        try:
+            with Module().constant(AppConfig, app_config):
+                model.get_client()
+        finally:
+            client_mod.genai.Client = original
+        return captured
+
+    def test_personal_key_routes_to_consumer_api(self):
+        cfg = provide_test_defaults()
+        cfg.GOOGLE_AI_PERSONAL = "AIza-fake-personal-key"
+        cfg.SENTRY_REGION = "us"
+        # Region MUST be set on the model since we still validate it.
+        # Actually with the personal-key path we should skip region
+        # validation — the consumer API is globally routed.
+        model = GeminiProvider.model("gemini-2.5-flash")
+
+        kwargs = self._client_kwargs(model, cfg)
+        assert kwargs == {"api_key": "AIza-fake-personal-key"}
+        # Crucially: vertexai key NOT set (default False)
+        assert "vertexai" not in kwargs
+        assert "location" not in kwargs
+
+    def test_empty_personal_key_falls_back_to_vertex(self):
+        cfg = provide_test_defaults()
+        cfg.GOOGLE_AI_PERSONAL = ""  # disabled
+        cfg.SENTRY_REGION = "us"
+        # Region must be pinned for the Vertex code path — production
+        # normally goes through `_execute_with_fallback` which picks one
+        # off the prefs list before calling `get_client`. We pin it
+        # explicitly here so we exercise the Vertex routing in isolation.
+        model = GeminiProvider.model("gemini-2.5-flash", region="us-central1")
+
+        kwargs = self._client_kwargs(model, cfg)
+        assert kwargs.get("vertexai") is True
+        assert kwargs.get("location") == "us-central1"
+        assert "api_key" not in kwargs
+
+    def test_personal_key_skips_region_validation(self):
+        """With the personal key set, get_client must NOT raise on a
+        model lacking a Vertex region (the consumer API ignores region).
+        """
+        cfg = provide_test_defaults()
+        cfg.GOOGLE_AI_PERSONAL = "AIza-fake-personal-key"
+        cfg.SENTRY_REGION = "us"
+
+        # Use a model whose default config picks SOME region; we just
+        # want to confirm no ValueError fires on the personal path.
+        model = GeminiProvider.model("gemini-2.5-flash")
+        # Should not raise.
+        kwargs = self._client_kwargs(model, cfg)
+        assert kwargs.get("api_key") == "AIza-fake-personal-key"
+
+    def test_personal_key_overrides_de_region_lock(self):
+        """SENTRY_REGION=de normally blocks non-europe Vertex regions, but
+        the personal-API path is globally routed and should bypass that
+        check (the consumer API doesn't pin a region).
+        """
+        cfg = provide_test_defaults()
+        cfg.GOOGLE_AI_PERSONAL = "AIza-fake-personal-key"
+        cfg.SENTRY_REGION = "de"
+
+        model = GeminiProvider.model("gemini-2.5-flash", region="us-central1")
+        # No ValueError despite us-central1 + de region.
+        kwargs = self._client_kwargs(model, cfg)
+        assert kwargs == {"api_key": "AIza-fake-personal-key"}

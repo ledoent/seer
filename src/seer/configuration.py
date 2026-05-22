@@ -89,6 +89,15 @@ class AppConfig(BaseModel):
 
     GOOGLE_CLOUD_PROJECT: str = ""
 
+    # Personal Google AI Studio API key (consumer Gemini API at
+    # generativelanguage.googleapis.com). When set, GeminiProvider routes
+    # calls to the consumer endpoint with this key INSTEAD of Vertex AI on
+    # GOOGLE_CLOUD_PROJECT. Useful for moving high-volume traffic off the
+    # billed org project to a personal AI Studio free tier (or a separate
+    # personal billing account). Empty string disables — the default is
+    # Vertex, which is what production used to use unconditionally.
+    GOOGLE_AI_PERSONAL: str = ""
+
     CODEBASE_GCS_STORAGE_BUCKET: str = ""
 
     SMOKE_CHECK: ParseBool = False

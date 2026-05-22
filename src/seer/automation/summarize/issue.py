@@ -64,6 +64,77 @@ class IssueSummaryWithScores(IssueSummary):
         )
 
 
+def _is_gemini_quota_exhausted(exc: Exception) -> bool:
+    """Detect Vertex `429 RESOURCE_EXHAUSTED` quota-exhaustion exceptions.
+
+    The google-genai SDK can surface quota errors as `ClientError(code=429)`
+    or as a bare exception whose `str()` carries one of the canonical
+    quota-exhausted strings — both forms are seen in production. Matching
+    the message keeps us robust to SDK changes between versions.
+    """
+    quota_markers = (
+        "429 RESOURCE_EXHAUSTED",
+        "Resource exhausted. Please try again later.",
+        "Quota exceeded",
+        "RESOURCE_EXHAUSTED",
+    )
+    if any(m in str(exc) for m in quota_markers):
+        return True
+    code = getattr(exc, "code", None)
+    if code == 429:
+        return True
+    status_code = getattr(exc, "status_code", None)
+    if status_code == 429:
+        return True
+    return False
+
+
+def _is_transient_network_error(exc: Exception) -> bool:
+    """Detect a transient socket/TLS drop during the Gemini stream.
+
+    The LlmClient's Gemini-side retry predicate already handles
+    `"TLS/SSL connection has been closed"`, `ChunkedEncodingError`, and a
+    few others — but not bare `ConnectionResetError` / `[Errno 104]`,
+    which is the actual shape seen in production (ledoent/seer #57,
+    1,727 events / 14d). Match by `isinstance` AND by canonical error
+    strings so SDK changes don't silently regress this.
+    """
+    if isinstance(exc, ConnectionResetError):
+        return True
+    markers = (
+        "Connection reset by peer",
+        "[Errno 104]",
+        "ConnectionResetError",
+    )
+    return any(m in str(exc) for m in markers)
+
+
+def _degraded_summary(request: SummarizeIssueRequest) -> "IssueSummaryWithScores":
+    """Fallback summary returned when Vertex quota is exhausted.
+
+    Keeps the contract intact (Sentry-side expects a usable response)
+    while making it obvious in the UI that the AI step was skipped. All
+    confidence/novelty scores land at 0.0 so any downstream gates
+    (autofix proceed-confidence, etc.) treat it as low signal.
+    """
+    title = (request.issue.title or "")[:120] or "Issue summary unavailable"
+    return IssueSummaryWithScores(
+        title=title,
+        whats_wrong=(
+            "Issue summary skipped because the AI quota was momentarily exhausted. "
+            "Refresh the issue in a minute or so to retry."
+        ),
+        session_related_issues="",
+        possible_cause="",
+        possible_cause_novelty_score=0.0,
+        possible_cause_confidence_score=0.0,
+        scores=SummarizeIssueScores(
+            possible_cause_confidence=0.0,
+            possible_cause_novelty=0.0,
+        ),
+    )
+
+
 class IssueSummaryForLlmToGenerate(BaseModel):
     whats_wrong: str
     session_related_issues: str
@@ -164,6 +235,31 @@ def summarize_issue(
             # Only retry if the error is context-limit-related
             if "token" in str(e).lower():
                 return None
+            if _is_gemini_quota_exhausted(e):
+                # Vertex 429 RESOURCE_EXHAUSTED. Raising propagates a 500 to
+                # Sentry-side, which retries the seer-RPC call N times, ties
+                # up a worker per retry, and snowballs into a retry storm
+                # that takes seer down for every other endpoint. Return a
+                # degraded but valid IssueSummary instead so the storm
+                # collapses at its source.
+                sentry_sdk.set_tag("summarize_issue.quota_exhausted", True)
+                sentry_sdk.capture_message(
+                    "Gemini quota exhausted in summarize_issue — returning degraded summary",
+                    level="warning",
+                )
+                return _degraded_summary(request)
+            if _is_transient_network_error(e):
+                # Mid-stream connection drop (TCP RST, TLS close, etc.).
+                # The LlmClient backoff predicate doesn't include ECONNRESET,
+                # so we'd otherwise propagate a 500 and trigger the same
+                # retry storm as the quota case. Tracked at ledoent/seer #57
+                # (1,727 events / 14d).
+                sentry_sdk.set_tag("summarize_issue.network_reset", True)
+                sentry_sdk.capture_message(
+                    "Transient network error in summarize_issue — returning degraded summary",
+                    level="warning",
+                )
+                return _degraded_summary(request)
             raise
 
         issue_summary = completion.parsed
@@ -191,9 +287,24 @@ def summarize_issue(
         # If failed with token error, retry with less context
         result = _generate_summary(full_context=False)
         if result is None:
-            raise Exception(
-                "Failed to generate issue summary even after retrying without breadcrumbs"
-            )
+            # Both attempts came back with parsed=None (Gemini Flash returned
+            # text that couldn't coerce into IssueSummaryForLlmToGenerate
+            # twice in a row — typically happens under heavy Vertex load or
+            # when the issue context shape confuses the structured output).
+            #
+            # Previously we raised here, which returned 500 to Sentry-side.
+            # Sentry's seer-rpc client retried, each retry tied up a worker,
+            # and the storm took every other seer endpoint offline until the
+            # underlying Gemini condition cleared. Tracked at ledoent/seer
+            # issues #54 (12,909 events/14d) + #55 (6,447 events/14d) =
+            # the top two seer fires combined.
+            #
+            # Return a degraded summary instead so the storm collapses at
+            # the source. The downstream gates (autofix proceed-confidence,
+            # fixability score) won't trigger on a zero-confidence summary,
+            # which is the desired behavior.
+            sentry_sdk.set_tag("summarize_issue.parsed_none_persistent", True)
+            return _degraded_summary(request)
 
     return result
 

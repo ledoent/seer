@@ -162,19 +162,25 @@ class TestSummarizeIssue:
         assert "bar details" in mock_llm_client.generate_structured.call_args[1]["prompt"]
         assert "baz details" in mock_llm_client.generate_structured.call_args[1]["prompt"]
 
-    def test_summarize_issue_returns_none_when_llm_parsed_is_none(
+    def test_summarize_issue_returns_degraded_when_llm_parsed_persistently_none(
         self, mock_llm_client, sample_request
     ):
-        """Regression guard for issue #45 — Gemini Flash retries 3x internally
-        and returns parsed=None on persistent JSON-coercion failure. The
-        summarize endpoints must not NPE on .model_dump() in that case.
+        """Persistent parsed=None across both retry attempts returns a
+        degraded summary instead of raising.
 
-        Before this guard landed the issue fired 2941 times in 24h.
+        Background: Gemini Flash retries 3x internally for structured output
+        and then returns parsed=None on persistent JSON-coercion failure.
+        The original guard (issue #45) caught the NPE on `.model_dump()`
+        but still raised after the second attempt. The raise propagated as
+        500 to Sentry, Sentry's seer-rpc client retried, and the storm
+        saturated workers. Tracked at ledoent/seer #54 + #55 combined =
+        19,356 events / 14d.
+
+        Now: degrade to a valid empty IssueSummaryWithScores so the storm
+        collapses at the source. The original NPE guard is preserved
+        (the function never reaches `.model_dump()` when parsed is None).
         """
-        # First call: full_context=True returns parsed=None — guard kicks in,
-        # the function returns None, and the outer summarize_issue retries
-        # with full_context=False. Second call also returns None, so the
-        # outer function raises an explicit error rather than NPE-ing.
+        # Both attempts return parsed=None.
         mock_llm_client.generate_structured.return_value = LlmGenerateStructuredResponse(
             parsed=None,
             metadata=LlmResponseMetadata(
@@ -184,11 +190,128 @@ class TestSummarizeIssue:
             ),
         )
 
-        with pytest.raises(Exception, match="even after retrying"):
+        result = summarize_issue(sample_request, llm_client=mock_llm_client)
+
+        assert isinstance(result, IssueSummaryWithScores)
+        # Degraded marker — UI shows the user that the summary was skipped
+        assert "skipped" in result.whats_wrong.lower() or "unavailable" in result.title.lower()
+        # All confidence scores at 0 so downstream gates treat as low-signal
+        assert result.scores.possible_cause_confidence == 0.0
+        assert result.scores.possible_cause_novelty == 0.0
+        # The full retry sequence ran: full_context=True then full_context=False
+        assert mock_llm_client.generate_structured.call_count == 2
+        # And critically: NPE guard preserved — never reached `.model_dump()`
+
+
+class TestSummarizeIssueQuotaDegradation:
+    """Vertex 429 RESOURCE_EXHAUSTED used to bubble out as 500 → Sentry's
+    seer-rpc retried → each retry tied up a worker → entire seer was
+    unreachable for autofix dispatch + other endpoints until quota
+    recovered. The fix catches the 429 at the source and returns a
+    degraded summary so the storm collapses immediately.
+    """
+
+    @pytest.fixture
+    def sample_request(self):
+        issues_dir = Path(__file__).parent / "fixtures" / "issues"
+        issues: list[IssueDetails] = []
+        for path in issues_dir.glob("issue_to_summarize*.json"):
+            with path.open() as f:
+                issues.append(IssueDetails.model_validate_json(f.read()))
+        return SummarizeIssueRequest(
+            group_id=0,
+            issue=issues[0],
+            connected_issues=[],
+        )
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            Exception("429 RESOURCE_EXHAUSTED: quota project foo"),
+            Exception("Resource exhausted. Please try again later."),
+            Exception("Quota exceeded for quota metric ..."),
+            # Bare-class form with a `code` attribute set to 429
+            type("ClientErr", (Exception,), {"code": 429})("vertex limit hit"),
+            # Bare-class form with status_code
+            type("StatusErr", (Exception,), {"status_code": 429})("rate limited"),
+        ],
+        ids=[
+            "msg-429-RESOURCE_EXHAUSTED",
+            "msg-resource-exhausted",
+            "msg-quota-exceeded",
+            "code-429",
+            "status_code-429",
+        ],
+    )
+    def test_returns_degraded_summary_on_quota_exhaustion(self, sample_request, exc):
+        mock_llm_client = Mock()
+        mock_llm_client.generate_structured.side_effect = exc
+
+        result = summarize_issue(sample_request, llm_client=mock_llm_client)
+
+        assert isinstance(result, IssueSummaryWithScores)
+        # Degraded marker — UI shows the user that the summary was skipped
+        assert "quota" in result.whats_wrong.lower()
+        # All confidence scores at 0 so downstream gates treat as low-signal
+        assert result.scores.possible_cause_confidence == 0.0
+        assert result.scores.possible_cause_novelty == 0.0
+        # The original issue title carries forward as the summary title
+        assert result.title  # not empty
+        # And critically: only ONE LLM call was made (no internal retry storm)
+        assert mock_llm_client.generate_structured.call_count == 1
+
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            ConnectionResetError(104, "Connection reset by peer"),
+            Exception("[Errno 104] Connection reset by peer"),
+            Exception("ConnectionResetError raised mid-stream"),
+        ],
+        ids=["ConnectionResetError-instance", "msg-errno-104", "msg-connectionreseterror"],
+    )
+    def test_returns_degraded_summary_on_transient_network_reset(self, sample_request, exc):
+        """Mid-stream socket/TLS drops (ledoent/seer #57, 1,727 events/14d)
+        used to bubble out as 500 → seer-rpc retry storm. Now degrade
+        to a valid empty summary so the storm collapses at the source.
+        """
+        mock_llm_client = Mock()
+        mock_llm_client.generate_structured.side_effect = exc
+
+        result = summarize_issue(sample_request, llm_client=mock_llm_client)
+
+        assert isinstance(result, IssueSummaryWithScores)
+        assert result.scores.possible_cause_confidence == 0.0
+        assert result.scores.possible_cause_novelty == 0.0
+        # Single LLM call — no internal retry storm.
+        assert mock_llm_client.generate_structured.call_count == 1
+
+    def test_non_quota_exception_still_propagates(self, sample_request):
+        """Quota-aware degradation must not swallow unrelated errors."""
+        mock_llm_client = Mock()
+        mock_llm_client.generate_structured.side_effect = RuntimeError(
+            "some other failure unrelated to quota"
+        )
+
+        with pytest.raises(RuntimeError, match="unrelated to quota"):
             summarize_issue(sample_request, llm_client=mock_llm_client)
 
-        # And critically: it did NOT raise AttributeError on None.model_dump()
-        # — the guard caught it before reaching .model_dump().
+    def test_token_error_still_takes_token_path(self, sample_request):
+        """Token-overflow exceptions trigger the existing full_context retry
+        loop. Both attempts return None (because the exception is caught and
+        normalized to None by the `if "token" in str(e).lower(): return None`
+        branch). With the parsed=None degrade landing here too, the final
+        result is a degraded summary, not a raise — same destination as
+        the persistent-parsed-None case.
+        """
+        mock_llm_client = Mock()
+        mock_llm_client.generate_structured.side_effect = Exception(
+            "input token count exceeds limit"
+        )
+
+        result = summarize_issue(sample_request, llm_client=mock_llm_client)
+        assert isinstance(result, IssueSummaryWithScores)
+        assert result.scores.possible_cause_confidence == 0.0
+        # Both retry attempts (full_context=True, then =False) were made.
         assert mock_llm_client.generate_structured.call_count == 2
 
 

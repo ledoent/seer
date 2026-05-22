@@ -174,7 +174,11 @@ def compare_signature(*, body: bytes, signature: str, config: AppConfig = inject
     secrets = config.JSON_API_SHARED_SECRETS
 
     if not signature.startswith("rpc0:"):
-        sentry_sdk.capture_message("Signature did not start with rpc0:")
+        sentry_sdk.capture_message(
+            "Signature did not start with rpc0:",
+            level="warning",
+            contexts={"request": _signature_failure_context(body, signature)},
+        )
         return False
 
     _, signature_data = signature.split(":", 2)
@@ -183,5 +187,43 @@ def compare_signature(*, body: bytes, signature: str, config: AppConfig = inject
         if is_valid(body, key, signature_data):
             return True
 
-    sentry_sdk.capture_message("No signature matches found.")
+    # Enriched diagnostic + fingerprint dedup. The compose-internal caller
+    # (post-process-forwarder auto-summary) used to fire this 8×/day with no
+    # context, generating a noisy "No signature matches found" issue that we
+    # couldn't diagnose. The context now carries the URL, body length,
+    # source IP, and the body prefix so a future investigator can correlate
+    # against the calling code path. The fingerprint groups all events into
+    # one issue regardless of body length so the storm stays a single fire.
+    ctx = _signature_failure_context(body, signature)
+    with sentry_sdk.push_scope() as scope:
+        scope.set_context("request", ctx)
+        scope.fingerprint = ["json_api.signature_mismatch"]
+        sentry_sdk.capture_message(
+            "No signature matches found.",
+            level="warning",
+        )
     return False
+
+
+def _signature_failure_context(body: bytes, signature: str) -> dict[str, object]:
+    """Build the diagnostic context dict attached to signature-failure events.
+
+    Captures everything the next investigator will want to correlate against
+    the calling code (url, source IP, body length + prefix, sig prefix) and
+    nothing that could exfiltrate secrets (only the first 16 chars of the
+    signature, body prefix capped at 200 bytes).
+    """
+    req = request  # flask thread-local
+    forwarded_for = req.headers.get("X-Forwarded-For", "")
+    return {
+        "url": req.url,
+        "method": req.method,
+        "remote_addr": req.remote_addr or "",
+        "x_forwarded_for": forwarded_for,
+        "user_agent": req.headers.get("User-Agent", ""),
+        "content_type": req.headers.get("Content-Type", ""),
+        "content_length": req.headers.get("Content-Length", ""),
+        "body_len": len(body),
+        "body_prefix": body[:200].decode("utf-8", errors="replace"),
+        "signature_prefix": signature[:16] + "..." if len(signature) > 16 else signature,
+    }

@@ -231,3 +231,116 @@ def test_json_api_signature_strict_mode():
             ).hexdigest()
             headers["Authorization"] = f"Rpcsignature rpc0:{signature}"
         assert changed.to_value(200)
+
+
+class TestSignatureFailureDiagnostics:
+    """Pin the diagnostic context that lands on a failed-signature event.
+
+    Background: ledoent/seer Sentry issue #76 fired 118 events / 14d as
+    "No signature matches found" with zero context — culprit URL, source
+    IP, and body shape were all invisible. Diagnosis took live SSH +
+    clickhouse queries to identify the caller (compose-internal
+    post-process-forwarder auto-summary). Pinning the enriched context +
+    fingerprint here so future investigators can read it off the event.
+    """
+
+    def _make_app(self):
+        app = Flask(__name__)
+        blueprint = Blueprint("blueprint", __name__)
+
+        @json_api(blueprint, "/v0/some/url")
+        def my_endpoint(request: DummyRequest) -> DummyResponse:
+            return DummyResponse(blah="ok")
+
+        app.register_blueprint(blueprint)
+        return app
+
+    @patch("seer.json_api.sentry_sdk")
+    def test_bad_prefix_capture_includes_request_context(self, mock_sdk):
+        app = self._make_app()
+        test_client = app.test_client()
+
+        with Module() as injector:
+            injector.get(AppConfig).JSON_API_SHARED_SECRETS = ["secret-one"]
+            test_client.post(
+                "/v0/some/url",
+                json={"thing": "x", "b": 1},
+                headers={"Authorization": "Rpcsignature notrpc0:xyz"},
+            )
+
+        # capture_message called with the bad-prefix branch
+        call = next(
+            c
+            for c in mock_sdk.capture_message.call_args_list
+            if "did not start with rpc0:" in c.args[0]
+        )
+        ctx = call.kwargs["contexts"]["request"]
+        assert ctx["url"].endswith("/v0/some/url")
+        assert ctx["method"] == "POST"
+        # body_len matches what flask received
+        assert ctx["body_len"] > 0
+        # signature_prefix truncated, no full secret leakage
+        assert "..." in ctx["signature_prefix"] or len(ctx["signature_prefix"]) <= 16
+
+    @patch("seer.json_api.sentry_sdk")
+    def test_no_match_capture_enriches_via_scope_and_fingerprint(self, mock_sdk):
+        app = self._make_app()
+        test_client = app.test_client()
+
+        # Build a request with VALID rpc0: prefix but wrong signature hex
+        with Module() as injector:
+            injector.get(AppConfig).JSON_API_SHARED_SECRETS = ["secret-one"]
+            test_client.post(
+                "/v0/some/url",
+                json={"thing": "x", "b": 1},
+                headers={"Authorization": "Rpcsignature rpc0:deadbeef"},
+            )
+
+        # push_scope was used so subsequent capture_message picks up the
+        # scope's context + fingerprint
+        assert mock_sdk.push_scope.called
+        scope = mock_sdk.push_scope.return_value.__enter__.return_value
+
+        # The set_context call carried the enriched request dict
+        ctx_call = next(c for c in scope.set_context.call_args_list if c.args[0] == "request")
+        ctx = ctx_call.args[1]
+        assert ctx["url"].endswith("/v0/some/url")
+        assert "body_prefix" in ctx and ctx["body_prefix"]  # non-empty
+        assert ctx["signature_prefix"].startswith("rpc0:deadbeef"[:16])
+
+        # The fingerprint groups all such failures into one Sentry issue
+        # regardless of body shape — so a storm stays a single fire.
+        assert scope.fingerprint == ["json_api.signature_mismatch"]
+
+        # And the capture_message itself is at warning level
+        capture_calls = [
+            c
+            for c in mock_sdk.capture_message.call_args_list
+            if "No signature matches found" in c.args[0]
+        ]
+        assert capture_calls
+        assert capture_calls[0].kwargs.get("level") == "warning"
+
+    @patch("seer.json_api.sentry_sdk")
+    def test_signature_failure_context_does_not_leak_full_signature(self, mock_sdk):
+        """Context dict caps the signature at 16 chars to avoid leaking
+        anything sensitive even though the signature itself is a public-ish
+        hex digest.
+        """
+        full_sig_hex = "deadbeef" * 8  # 64 chars
+        app = self._make_app()
+        test_client = app.test_client()
+        with Module() as injector:
+            injector.get(AppConfig).JSON_API_SHARED_SECRETS = ["secret-one"]
+            test_client.post(
+                "/v0/some/url",
+                json={"thing": "x", "b": 1},
+                headers={"Authorization": f"Rpcsignature rpc0:{full_sig_hex}"},
+            )
+
+        scope = mock_sdk.push_scope.return_value.__enter__.return_value
+        ctx_call = next(c for c in scope.set_context.call_args_list if c.args[0] == "request")
+        ctx = ctx_call.args[1]
+        # Truncated representation only
+        assert full_sig_hex not in ctx["signature_prefix"]
+        assert len(ctx["signature_prefix"]) <= 20

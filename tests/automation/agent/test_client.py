@@ -1499,3 +1499,48 @@ class TestGeminiProviderPersonalApiKey:
         # No ValueError despite us-central1 + de region.
         kwargs = self._client_kwargs(model, cfg)
         assert kwargs == {"api_key": "AIza-fake-personal-key"}
+
+
+class TestGeminiRegionPinForVersion3:
+    """Gemini 3.x models (gemini-3-flash-preview, gemini-3.1-flash-lite,
+    gemini-3.5-flash, …) must be pinned to the `global` region.
+
+    Background: production ledoent/seer Sentry issues #24 + #27 fired
+    16 events/hour AFTER the 2.5-flash → 3.5-flash bump merged on
+    2026-05-22. Root cause: the Vertex data plane returns 404 NOT_FOUND
+    for streamGenerateContent on `gemini-3.5-flash` in us-central1
+    despite the control plane (`models.get`) listing it as available
+    there. Pinning the 3.x family to `global` only avoids the
+    fallback chain tripping into a region where the model is
+    registered-but-not-serving.
+    """
+
+    def test_gemini_3_5_flash_pinned_to_global(self):
+        cfg = GeminiProvider.get_config("gemini-3.5-flash")
+        assert cfg is not None
+        assert cfg.region_preference == {"us": ["global"], "de": ["global"]}
+
+    def test_gemini_3_1_flash_lite_pinned_to_global(self):
+        cfg = GeminiProvider.get_config("gemini-3.1-flash-lite")
+        assert cfg is not None
+        assert cfg.region_preference == {"us": ["global"], "de": ["global"]}
+
+    def test_gemini_3_flash_preview_pinned_to_global_via_3x_rule(self):
+        # `^gemini-3(\.|-)` matches `gemini-3-flash-preview` (hyphen separator)
+        # AND `gemini-3.1-flash-lite` (dot). Pin holds either way.
+        cfg = GeminiProvider.get_config("gemini-3-flash-preview")
+        assert cfg is not None
+        assert cfg.region_preference == {"us": ["global"], "de": ["global"]}
+
+    def test_gemini_2_5_flash_keeps_us_central1_fallback(self):
+        # The pin must NOT bleed into the 2.x family — those still have
+        # the us-central1 + us-east1 fallback for redundancy.
+        cfg = GeminiProvider.get_config("gemini-2.5-flash")
+        assert cfg is not None
+        assert "us-central1" in cfg.region_preference["us"]
+        assert "us-east1" in cfg.region_preference["us"]
+
+    def test_gemini_2_5_pro_keeps_default_routing(self):
+        cfg = GeminiProvider.get_config("gemini-2.5-pro")
+        assert cfg is not None
+        assert cfg.region_preference["us"] == ["global", "us-central1", "us-east1"]

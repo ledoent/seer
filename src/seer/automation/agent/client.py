@@ -1151,6 +1151,23 @@ class GeminiProvider(BaseLlmProvider):
             },
         ),
         LlmModelDefaultConfig(
+            # Gemini 3.x models (gemini-3-flash-preview, gemini-3.1-flash-lite,
+            # gemini-3.5-flash, …) — the data plane (streamGenerateContent /
+            # generateContent) returns 404 NOT_FOUND in regional endpoints
+            # (us-central1, us-east1, europe-west*) even when the control
+            # plane (`models.get`) lists the model as available there.
+            # Observed in ledoent/seer Sentry issues #24 + #27 after the
+            # 2.5-flash → 3.5-flash bump landed on 2026-05-22. Pin to
+            # `global` only so the fallback chain doesn't trip into a
+            # region where the model is registered but not serving.
+            match=r"^gemini-3(\.|-)",
+            defaults=LlmProviderDefaults(temperature=0.0),
+            region_preference={
+                "us": ["global"],
+                "de": ["global"],
+            },
+        ),
+        LlmModelDefaultConfig(
             match=r".*",
             defaults=LlmProviderDefaults(temperature=0.0),
             region_preference={

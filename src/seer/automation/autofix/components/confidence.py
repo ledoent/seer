@@ -59,7 +59,7 @@ class ConfidenceComponent(BaseComponent[ConfidenceRequest, ConfidenceOutput]):
             ),
             messages=request.run_memory,
             system_prompt=ConfidencePrompts.format_system_msg(),
-            model=GeminiProvider.model("gemini-3.5-flash"),
+            model=GeminiProvider.model("gemini-3.1-flash-lite"),
             response_format=ConfidenceOutput,
         )
         data = output.parsed

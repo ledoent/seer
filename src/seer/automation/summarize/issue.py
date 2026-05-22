@@ -225,7 +225,7 @@ def summarize_issue(
 
         try:
             completion = llm_client.generate_structured(
-                model=GeminiProvider.model("gemini-2.5-flash"),
+                model=GeminiProvider.model("gemini-3.5-flash"),
                 prompt=prompt,
                 response_format=IssueSummaryForLlmToGenerate,
                 temperature=0.0,

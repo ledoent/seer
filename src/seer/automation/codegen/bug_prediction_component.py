@@ -68,7 +68,7 @@ class FilterFilesComponent(BaseComponent[FilterFilesRequest, FilterFilesOutput])
                 ),
                 num_files_desired=request.num_files_desired,
             ),
-            model=GeminiProvider.model("gemini-2.5-flash"),
+            model=GeminiProvider.model("gemini-3.5-flash"),
             response_format=list[FilenameFromThisPR],
         )
 
@@ -168,7 +168,7 @@ class BugPredictorComponent(BaseComponent[BugPredictorRequest, BugPredictorOutpu
                 prompt=BugPredictionPrompts.format_prompt_structured_hypothesis(
                     hypotheses_unstructured
                 ),
-                model=GeminiProvider.model("gemini-2.5-flash"),
+                model=GeminiProvider.model("gemini-3.5-flash"),
                 response_format=list[BugPredictorHypothesis],
                 max_tokens=8192,
                 run_name="Separate into list of hypotheses",
@@ -238,7 +238,7 @@ class FormatterComponent(BaseComponent[FormatterRequest, FormatterOutput]):
 
         response = llm_client.generate_structured(
             prompt=BugPredictionPrompts.format_prompt_reformat_followups(request.located_followups),
-            model=GeminiProvider.model("gemini-2.5-flash"),
+            model=GeminiProvider.model("gemini-3.5-flash"),
             response_format=list[BugPrediction],
             run_name="Bug Prediction Formatter",
             max_tokens=8192,

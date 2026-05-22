@@ -49,7 +49,7 @@ def summarize_trace(
     try:
         completion = llm_client.generate_structured(
             model=GeminiProvider.model(
-                "gemini-2.5-flash",
+                "gemini-3.5-flash",
             ),
             prompt=prompt,
             response_format=TraceSummaryForLlmToGenerate,

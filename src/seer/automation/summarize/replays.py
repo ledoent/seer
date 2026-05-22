@@ -127,7 +127,7 @@ def run_single_replay_summary(
     ).format(replay_data=json.dumps(replay.model_dump(mode="json")))
 
     completion = llm_client.generate_structured(
-        model=GeminiProvider.model("gemini-2.5-flash"),
+        model=GeminiProvider.model("gemini-3.5-flash"),
         prompt=replay_prompt,
         response_format=ReplaySummary,
         temperature=0.0,
@@ -191,7 +191,7 @@ def run_cross_session_completion(
     ).format(all_steps=json.dumps(all_steps))
 
     completion = llm_client.generate_structured(
-        model=GeminiProvider.model("gemini-2.5-flash"),
+        model=GeminiProvider.model("gemini-3.5-flash"),
         prompt=replay_prompt,
         response_format=CommonReplaySummary,
         temperature=0.0,

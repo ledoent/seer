@@ -91,7 +91,7 @@ class ChangeDescriptionComponent(BaseComponent[ChangeDescriptionRequest, ChangeD
                 previous_commits=previous_commits,
                 title_format_hint=title_format_hint,
             ),
-            model=GeminiProvider.model("gemini-2.5-flash"),
+            model=GeminiProvider.model("gemini-3.5-flash"),
             response_format=ChangeDescriptionOutput,
         )
         data = output.parsed

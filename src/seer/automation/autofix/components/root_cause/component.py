@@ -62,10 +62,10 @@ class RootCauseAnalysisComponent(BaseComponent[RootCauseAnalysisRequest, RootCau
                 us_discovery_config = {
                     "models": [
                         GeminiProvider.model(
-                            "gemini-2.5-flash",
+                            "gemini-3.5-flash",
                             region="us-central1",  # Only try in this region for this model.
                         ),
-                        GeminiProvider.model("gemini-2.5-flash"),
+                        GeminiProvider.model("gemini-3.5-flash"),
                     ],
                     "max_tokens": 32000,
                 }
@@ -143,17 +143,17 @@ class RootCauseAnalysisComponent(BaseComponent[RootCauseAnalysisRequest, RootCau
                 )
 
                 de_formatter_config: dict[str, object] = {
-                    "model": GeminiProvider.model("gemini-2.5-flash"),
+                    "model": GeminiProvider.model("gemini-3.5-flash"),
                     "max_tokens": 8192,
                 }
 
                 us_formatter_config: dict[str, object] = {
                     "models": [
                         GeminiProvider.model(
-                            "gemini-2.5-flash",
+                            "gemini-3.5-flash",
                             region="us-central1",  # Only try in this region for this model.
                         ),
-                        GeminiProvider.model("gemini-2.5-flash"),
+                        GeminiProvider.model("gemini-3.5-flash"),
                     ],
                     "max_tokens": 32000,
                 }

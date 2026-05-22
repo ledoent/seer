@@ -174,7 +174,12 @@ def compare_signature(*, body: bytes, signature: str, config: AppConfig = inject
     secrets = config.JSON_API_SHARED_SECRETS
 
     if not signature.startswith("rpc0:"):
-        sentry_sdk.capture_message("Signature did not start with rpc0:")
+        _capture_signature_failure(
+            "Signature did not start with rpc0:",
+            body=body,
+            signature=signature,
+            fingerprint="json_api.signature_bad_prefix",
+        )
         return False
 
     _, signature_data = signature.split(":", 2)
@@ -183,5 +188,59 @@ def compare_signature(*, body: bytes, signature: str, config: AppConfig = inject
         if is_valid(body, key, signature_data):
             return True
 
-    sentry_sdk.capture_message("No signature matches found.")
+    # The compose-internal caller (post-process-forwarder auto-summary)
+    # used to fire this 8×/day with no context, generating a noisy
+    # "No signature matches found" Sentry issue we couldn't diagnose. The
+    # enriched request context now carries url + source IP + body shape +
+    # signature prefix so a future investigator can correlate against the
+    # calling code path. Distinct fingerprints keep the two failure modes
+    # (bad-prefix vs no-match) as separate Sentry issues but each dedups
+    # to one event regardless of body shape — a recurring auth bug stays
+    # one fire instead of fanning out.
+    _capture_signature_failure(
+        "No signature matches found.",
+        body=body,
+        signature=signature,
+        fingerprint="json_api.signature_mismatch",
+    )
     return False
+
+
+def _capture_signature_failure(
+    message: str, *, body: bytes, signature: str, fingerprint: str
+) -> None:
+    """Send a warning-level signature-failure capture with enriched request
+    context, scoped to the given fingerprint for dedup.
+
+    Both failure modes (bad-prefix + no-match) funnel through here so they
+    share the diagnostic context shape and dedup semantics. The caller
+    supplies a distinct fingerprint per failure mode so they surface as
+    separate Sentry issues even though the wire format is identical.
+    """
+    with sentry_sdk.push_scope() as scope:
+        scope.set_context("request", _signature_failure_context(body, signature))
+        scope.fingerprint = [fingerprint]
+        sentry_sdk.capture_message(message, level="warning")
+
+
+def _signature_failure_context(body: bytes, signature: str) -> dict[str, object]:
+    """Build the diagnostic context dict attached to signature-failure events.
+
+    Captures everything the next investigator will want to correlate against
+    the calling code (url, source IP, body length + prefix, sig prefix) and
+    nothing that could exfiltrate secrets (only the first 16 chars of the
+    signature, body prefix capped at 200 bytes).
+    """
+    req = request  # flask thread-local
+    return {
+        "url": req.url,
+        "method": req.method,
+        "remote_addr": req.remote_addr or "",
+        "x_forwarded_for": req.headers.get("X-Forwarded-For", ""),
+        "user_agent": req.headers.get("User-Agent", ""),
+        "content_type": req.headers.get("Content-Type", ""),
+        "content_length": req.headers.get("Content-Length", ""),
+        "body_len": len(body),
+        "body_prefix": body[:200].decode("utf-8", errors="replace"),
+        "signature_prefix": signature[:16] + "..." if len(signature) > 16 else signature,
+    }

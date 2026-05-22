@@ -1195,6 +1195,16 @@ class GeminiProvider(BaseLlmProvider):
 
     @inject
     def get_client(self, app_config: AppConfig = injected) -> genai.Client:
+        # Personal AI Studio key takes precedence when set — routes calls to
+        # the consumer Gemini API at generativelanguage.googleapis.com and
+        # bills against the personal account associated with the key. The
+        # region attribute is ignored on this code path (consumer API is
+        # globally routed). Used to peel high-volume traffic off the billed
+        # org Vertex project for cost control. See seer/configuration.py
+        # `GOOGLE_AI_PERSONAL` for the opt-in.
+        if app_config.GOOGLE_AI_PERSONAL:
+            return genai.Client(api_key=app_config.GOOGLE_AI_PERSONAL)
+
         if not self.region:
             raise ValueError(
                 f"No region selected for model {self.model_name}. GeminiProvider requires explicit region selection."
@@ -2575,7 +2585,7 @@ class LlmClient:
         content_chunks: list[str],
         tool_calls: list[ToolCall],
         model: LlmProvider,
-        thinking_content_chunks: list[str] = [],
+        thinking_content_chunks: list[str] = [],  # noqa: B006
         thinking_signature: str | None = None,
     ) -> Message:
         if model.provider_name == LlmProviderType.OPENAI:

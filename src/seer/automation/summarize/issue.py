@@ -255,9 +255,24 @@ def summarize_issue(
         # If failed with token error, retry with less context
         result = _generate_summary(full_context=False)
         if result is None:
-            raise Exception(
-                "Failed to generate issue summary even after retrying without breadcrumbs"
-            )
+            # Both attempts came back with parsed=None (Gemini Flash returned
+            # text that couldn't coerce into IssueSummaryForLlmToGenerate
+            # twice in a row — typically happens under heavy Vertex load or
+            # when the issue context shape confuses the structured output).
+            #
+            # Previously we raised here, which returned 500 to Sentry-side.
+            # Sentry's seer-rpc client retried, each retry tied up a worker,
+            # and the storm took every other seer endpoint offline until the
+            # underlying Gemini condition cleared. Tracked at ledoent/seer
+            # issues #54 (12,909 events/14d) + #55 (6,447 events/14d) =
+            # the top two seer fires combined.
+            #
+            # Return a degraded summary instead so the storm collapses at
+            # the source. The downstream gates (autofix proceed-confidence,
+            # fixability score) won't trigger on a zero-confidence summary,
+            # which is the desired behavior.
+            sentry_sdk.set_tag("summarize_issue.parsed_none_persistent", True)
+            return _degraded_summary(request)
 
     return result
 

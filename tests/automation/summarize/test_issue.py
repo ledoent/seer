@@ -162,19 +162,25 @@ class TestSummarizeIssue:
         assert "bar details" in mock_llm_client.generate_structured.call_args[1]["prompt"]
         assert "baz details" in mock_llm_client.generate_structured.call_args[1]["prompt"]
 
-    def test_summarize_issue_returns_none_when_llm_parsed_is_none(
+    def test_summarize_issue_returns_degraded_when_llm_parsed_persistently_none(
         self, mock_llm_client, sample_request
     ):
-        """Regression guard for issue #45 — Gemini Flash retries 3x internally
-        and returns parsed=None on persistent JSON-coercion failure. The
-        summarize endpoints must not NPE on .model_dump() in that case.
+        """Persistent parsed=None across both retry attempts returns a
+        degraded summary instead of raising.
 
-        Before this guard landed the issue fired 2941 times in 24h.
+        Background: Gemini Flash retries 3x internally for structured output
+        and then returns parsed=None on persistent JSON-coercion failure.
+        The original guard (issue #45) caught the NPE on `.model_dump()`
+        but still raised after the second attempt. The raise propagated as
+        500 to Sentry, Sentry's seer-rpc client retried, and the storm
+        saturated workers. Tracked at ledoent/seer #54 + #55 combined =
+        19,356 events / 14d.
+
+        Now: degrade to a valid empty IssueSummaryWithScores so the storm
+        collapses at the source. The original NPE guard is preserved
+        (the function never reaches `.model_dump()` when parsed is None).
         """
-        # First call: full_context=True returns parsed=None — guard kicks in,
-        # the function returns None, and the outer summarize_issue retries
-        # with full_context=False. Second call also returns None, so the
-        # outer function raises an explicit error rather than NPE-ing.
+        # Both attempts return parsed=None.
         mock_llm_client.generate_structured.return_value = LlmGenerateStructuredResponse(
             parsed=None,
             metadata=LlmResponseMetadata(
@@ -184,12 +190,17 @@ class TestSummarizeIssue:
             ),
         )
 
-        with pytest.raises(Exception, match="even after retrying"):
-            summarize_issue(sample_request, llm_client=mock_llm_client)
+        result = summarize_issue(sample_request, llm_client=mock_llm_client)
 
-        # And critically: it did NOT raise AttributeError on None.model_dump()
-        # — the guard caught it before reaching .model_dump().
+        assert isinstance(result, IssueSummaryWithScores)
+        # Degraded marker — UI shows the user that the summary was skipped
+        assert "skipped" in result.whats_wrong.lower() or "unavailable" in result.title.lower()
+        # All confidence scores at 0 so downstream gates treat as low-signal
+        assert result.scores.possible_cause_confidence == 0.0
+        assert result.scores.possible_cause_novelty == 0.0
+        # The full retry sequence ran: full_context=True then full_context=False
         assert mock_llm_client.generate_structured.call_count == 2
+        # And critically: NPE guard preserved — never reached `.model_dump()`
 
 
 class TestSummarizeIssueQuotaDegradation:
@@ -260,16 +271,22 @@ class TestSummarizeIssueQuotaDegradation:
             summarize_issue(sample_request, llm_client=mock_llm_client)
 
     def test_token_error_still_takes_token_path(self, sample_request):
-        """The existing context-too-long retry path is unchanged."""
+        """Token-overflow exceptions trigger the existing full_context retry
+        loop. Both attempts return None (because the exception is caught and
+        normalized to None by the `if "token" in str(e).lower(): return None`
+        branch). With the parsed=None degrade landing here too, the final
+        result is a degraded summary, not a raise — same destination as
+        the persistent-parsed-None case.
+        """
         mock_llm_client = Mock()
         mock_llm_client.generate_structured.side_effect = Exception(
             "input token count exceeds limit"
         )
 
-        with pytest.raises(Exception, match="even after retrying"):
-            summarize_issue(sample_request, llm_client=mock_llm_client)
-        # Token errors trigger the existing full_context retry loop:
-        # one call with full context, one without → 2 total.
+        result = summarize_issue(sample_request, llm_client=mock_llm_client)
+        assert isinstance(result, IssueSummaryWithScores)
+        assert result.scores.possible_cause_confidence == 0.0
+        # Both retry attempts (full_context=True, then =False) were made.
         assert mock_llm_client.generate_structured.call_count == 2
 
 

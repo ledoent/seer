@@ -89,6 +89,26 @@ def _is_gemini_quota_exhausted(exc: Exception) -> bool:
     return False
 
 
+def _is_transient_network_error(exc: Exception) -> bool:
+    """Detect a transient socket/TLS drop during the Gemini stream.
+
+    The LlmClient's Gemini-side retry predicate already handles
+    `"TLS/SSL connection has been closed"`, `ChunkedEncodingError`, and a
+    few others — but not bare `ConnectionResetError` / `[Errno 104]`,
+    which is the actual shape seen in production (ledoent/seer #57,
+    1,727 events / 14d). Match by `isinstance` AND by canonical error
+    strings so SDK changes don't silently regress this.
+    """
+    if isinstance(exc, ConnectionResetError):
+        return True
+    markers = (
+        "Connection reset by peer",
+        "[Errno 104]",
+        "ConnectionResetError",
+    )
+    return any(m in str(exc) for m in markers)
+
+
 def _degraded_summary(request: SummarizeIssueRequest) -> "IssueSummaryWithScores":
     """Fallback summary returned when Vertex quota is exhausted.
 
@@ -225,6 +245,18 @@ def summarize_issue(
                 sentry_sdk.set_tag("summarize_issue.quota_exhausted", True)
                 sentry_sdk.capture_message(
                     "Gemini quota exhausted in summarize_issue — returning degraded summary",
+                    level="warning",
+                )
+                return _degraded_summary(request)
+            if _is_transient_network_error(e):
+                # Mid-stream connection drop (TCP RST, TLS close, etc.).
+                # The LlmClient backoff predicate doesn't include ECONNRESET,
+                # so we'd otherwise propagate a 500 and trigger the same
+                # retry storm as the quota case. Tracked at ledoent/seer #57
+                # (1,727 events / 14d).
+                sentry_sdk.set_tag("summarize_issue.network_reset", True)
+                sentry_sdk.capture_message(
+                    "Transient network error in summarize_issue — returning degraded summary",
                     level="warning",
                 )
                 return _degraded_summary(request)

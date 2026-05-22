@@ -260,6 +260,31 @@ class TestSummarizeIssueQuotaDegradation:
         # And critically: only ONE LLM call was made (no internal retry storm)
         assert mock_llm_client.generate_structured.call_count == 1
 
+    @pytest.mark.parametrize(
+        "exc",
+        [
+            ConnectionResetError(104, "Connection reset by peer"),
+            Exception("[Errno 104] Connection reset by peer"),
+            Exception("ConnectionResetError raised mid-stream"),
+        ],
+        ids=["ConnectionResetError-instance", "msg-errno-104", "msg-connectionreseterror"],
+    )
+    def test_returns_degraded_summary_on_transient_network_reset(self, sample_request, exc):
+        """Mid-stream socket/TLS drops (ledoent/seer #57, 1,727 events/14d)
+        used to bubble out as 500 → seer-rpc retry storm. Now degrade
+        to a valid empty summary so the storm collapses at the source.
+        """
+        mock_llm_client = Mock()
+        mock_llm_client.generate_structured.side_effect = exc
+
+        result = summarize_issue(sample_request, llm_client=mock_llm_client)
+
+        assert isinstance(result, IssueSummaryWithScores)
+        assert result.scores.possible_cause_confidence == 0.0
+        assert result.scores.possible_cause_novelty == 0.0
+        # Single LLM call — no internal retry storm.
+        assert mock_llm_client.generate_structured.call_count == 1
+
     def test_non_quota_exception_still_propagates(self, sample_request):
         """Quota-aware degradation must not swallow unrelated errors."""
         mock_llm_client = Mock()

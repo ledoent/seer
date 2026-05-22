@@ -256,7 +256,12 @@ class TestSignatureFailureDiagnostics:
         return app
 
     @patch("seer.json_api.sentry_sdk")
-    def test_bad_prefix_capture_includes_request_context(self, mock_sdk):
+    def test_bad_prefix_capture_enriches_via_scope_and_fingerprint(self, mock_sdk):
+        """Bad-prefix branch funnels through the same `_capture_signature_failure`
+        helper as the no-match branch — pin that it gets the enriched
+        request context AND its own distinct fingerprint so the two
+        failure modes surface as separate Sentry issues.
+        """
         app = self._make_app()
         test_client = app.test_client()
 
@@ -268,19 +273,25 @@ class TestSignatureFailureDiagnostics:
                 headers={"Authorization": "Rpcsignature notrpc0:xyz"},
             )
 
-        # capture_message called with the bad-prefix branch
-        call = next(
+        # push_scope was used; context carries the enriched request dict.
+        scope = mock_sdk.push_scope.return_value.__enter__.return_value
+        ctx_call = next(c for c in scope.set_context.call_args_list if c.args[0] == "request")
+        ctx = ctx_call.args[1]
+        assert ctx["url"].endswith("/v0/some/url")
+        assert ctx["method"] == "POST"
+        assert ctx["body_len"] > 0
+
+        # Distinct fingerprint per failure mode (vs the no-match case).
+        assert scope.fingerprint == ["json_api.signature_bad_prefix"]
+
+        # And the capture_message is at warning level
+        capture_calls = [
             c
             for c in mock_sdk.capture_message.call_args_list
             if "did not start with rpc0:" in c.args[0]
-        )
-        ctx = call.kwargs["contexts"]["request"]
-        assert ctx["url"].endswith("/v0/some/url")
-        assert ctx["method"] == "POST"
-        # body_len matches what flask received
-        assert ctx["body_len"] > 0
-        # signature_prefix truncated, no full secret leakage
-        assert "..." in ctx["signature_prefix"] or len(ctx["signature_prefix"]) <= 16
+        ]
+        assert capture_calls
+        assert capture_calls[0].kwargs.get("level") == "warning"
 
     @patch("seer.json_api.sentry_sdk")
     def test_no_match_capture_enriches_via_scope_and_fingerprint(self, mock_sdk):
@@ -344,3 +355,27 @@ class TestSignatureFailureDiagnostics:
         # Truncated representation only
         assert full_sig_hex not in ctx["signature_prefix"]
         assert len(ctx["signature_prefix"]) <= 20
+
+    @patch("seer.json_api.sentry_sdk")
+    def test_short_signature_no_ellipsis(self, mock_sdk):
+        """A signature <= 16 chars is short enough that we don't need the
+        truncation marker. Pin that the `signature_prefix` field returns
+        the value verbatim in that case.
+        """
+        short_sig_hex = "abc123"  # 6 chars after rpc0:
+        app = self._make_app()
+        test_client = app.test_client()
+        with Module() as injector:
+            injector.get(AppConfig).JSON_API_SHARED_SECRETS = ["secret-one"]
+            test_client.post(
+                "/v0/some/url",
+                json={"thing": "x", "b": 1},
+                headers={"Authorization": f"Rpcsignature rpc0:{short_sig_hex}"},
+            )
+
+        scope = mock_sdk.push_scope.return_value.__enter__.return_value
+        ctx_call = next(c for c in scope.set_context.call_args_list if c.args[0] == "request")
+        ctx = ctx_call.args[1]
+        # The full "rpc0:abc123" (11 chars) fits inside the 16-char cap → no ellipsis
+        assert ctx["signature_prefix"] == f"rpc0:{short_sig_hex}"
+        assert "..." not in ctx["signature_prefix"]

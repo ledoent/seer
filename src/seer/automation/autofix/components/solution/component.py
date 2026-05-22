@@ -196,17 +196,17 @@ class SolutionComponent(BaseComponent[SolutionRequest, SolutionOutput]):
                 self.context.event_manager.add_log("Formatting for human consumption...")
 
                 de_config: dict[str, object] = {
-                    "model": GeminiProvider.model("gemini-2.5-flash"),
+                    "model": GeminiProvider.model("gemini-3.5-flash"),
                 }
 
                 us_config: dict[str, object] = {
                     "models": [
                         GeminiProvider.model(
-                            "gemini-2.5-flash",
+                            "gemini-3.5-flash",
                             region="us-central1",
                         ),
-                        GeminiProvider.model("gemini-2.5-flash"),
-                        GeminiProvider.model("gemini-2.5-flash"),
+                        GeminiProvider.model("gemini-3.5-flash"),
+                        GeminiProvider.model("gemini-3.5-flash"),
                     ],
                 }
 

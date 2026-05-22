@@ -1202,10 +1202,10 @@ def llm_generate_endpoint(data: LlmGenerateRequest) -> LlmGenerateResponse:
     try:
         # Map Sentry's provider hints to Gemini GA models.
         model_mapping = {
-            "flash": "gemini-2.5-flash",
+            "flash": "gemini-3.5-flash",
             "pro": "gemini-2.5-pro",
         }
-        model_name = model_mapping.get(data.model, "gemini-2.5-flash")
+        model_name = model_mapping.get(data.model, "gemini-3.5-flash")
         model = GeminiProvider.model(model_name)
 
         llm_client = LlmClient()

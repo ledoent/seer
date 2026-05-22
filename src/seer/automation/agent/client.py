@@ -2585,9 +2585,14 @@ class LlmClient:
         content_chunks: list[str],
         tool_calls: list[ToolCall],
         model: LlmProvider,
-        thinking_content_chunks: list[str] = [],  # noqa: B006
+        thinking_content_chunks: list[str] | None = None,
         thinking_signature: str | None = None,
     ) -> Message:
+        # The Anthropic inner method expects a non-optional list; normalize
+        # None → [] here so the provider contract stays unchanged. Default
+        # was `= []` (mutable, B006) — fixing properly instead of `# noqa`.
+        if thinking_content_chunks is None:
+            thinking_content_chunks = []
         if model.provider_name == LlmProviderType.OPENAI:
             openai_model = cast(OpenAiProvider, model)
             return openai_model.construct_message_from_stream(content_chunks, tool_calls)
